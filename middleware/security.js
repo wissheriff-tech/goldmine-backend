@@ -41,7 +41,7 @@ const securityHeaders = helmet({
  */
 const globalLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  max: 1000, // INCREASED FOR DEV: Limit each IP to 1000 requests per windowMs
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -60,13 +60,13 @@ const globalLimiter = rateLimit({
  */
 const authLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 20, // Limit each IP to 20 login attempts per windowMs (increased for testing)
+  max: 100, // INCREASED FOR DEV: Limit each IP to 100 login attempts per windowMs
   skipSuccessfulRequests: true,
   message: 'Too many authentication attempts. Please try again later.',
   handler: (req, res) => {
     res.status(429).json({
       success: false,
-      message: 'Too many login attempts. Please try again after 15 minutes.',
+      message: 'Too many login attempts. Please try again after 5 minutes.',
       retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
     });
   }
@@ -78,12 +78,12 @@ const authLimiter = rateLimit({
  */
 const transactionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // Limit each user to 10 transactions per hour
+  max: 100, // INCREASED FOR DEV: Limit each user to 100 transactions per hour
   message: 'Too many transaction requests. Please try again later.',
   handler: (req, res) => {
     res.status(429).json({
       success: false,
-      message: 'Transaction limit exceeded. Please try again in 1 hour.',
+      message: 'Transaction limit exceeded. Please try again later.',
       retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
     });
   }
@@ -95,7 +95,7 @@ const transactionLimiter = rateLimit({
  */
 const adminLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 30, // 30 requests per minute
+  max: 60, // INCREASED FOR DEV: 60 requests per minute
   message: 'Too many admin operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -112,7 +112,7 @@ const adminLimiter = rateLimit({
  */
 const financeLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 30, // 30 requests per 15 minutes
+  max: 60, // INCREASED FOR DEV: 60 requests per 5 minutes
   message: 'Too many finance operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -129,12 +129,12 @@ const financeLimiter = rateLimit({
  */
 const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3, // Maximum 3 password reset requests per hour
+  max: 10, // INCREASED FOR DEV: Maximum 10 password reset requests per hour
   message: 'Too many password reset attempts.',
   handler: (req, res) => {
     res.status(429).json({
       success: false,
-      message: 'You have requested too many password resets. Please try again in 1 hour.',
+      message: 'You have requested too many password resets. Please try again later.',
       retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
     });
   }

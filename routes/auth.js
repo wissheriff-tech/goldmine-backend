@@ -6,7 +6,7 @@ const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 
-// Validation and Security Middleware
+// Validation Middleware
 const {
   validateSignup,
   validateLogin,
@@ -14,6 +14,7 @@ const {
   validateResetPassword
 } = require('../middleware/validation');
 
+// Security Middleware
 const {
   authLimiter,
   passwordResetLimiter
@@ -248,7 +249,8 @@ router.post('/change-password', authenticate, validateChangePassword, async (req
 // @route   POST /api/auth/verify-2fa
 // @desc    Verify 2FA code
 // @access  Public
-router.post('/verify-2fa', async (req, res) => {
+// FIX: Added authLimiter to prevent brute force
+router.post('/verify-2fa', authLimiter, async (req, res) => {
   try {
     const { userId, code } = req.body;
 
@@ -475,7 +477,8 @@ router.get('/verify-email/:token', async (req, res) => {
 // @route   POST /api/auth/resend-verification
 // @desc    Resend email verification
 // @access  Public
-router.post('/resend-verification', async (req, res) => {
+// FIX: Added passwordResetLimiter to prevent email spam
+router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -513,7 +516,8 @@ router.post('/resend-verification', async (req, res) => {
 // @route   POST /api/auth/google
 // @desc    Google OAuth login/signup
 // @access  Public
-router.post('/google', async (req, res) => {
+// FIX: Added authLimiter
+router.post('/google', authLimiter, async (req, res) => {
   try {
     const { googleId, email, name, profilePicture } = req.body;
 
@@ -606,7 +610,8 @@ router.post('/google', async (req, res) => {
 // @route   POST /api/auth/facebook
 // @desc    Facebook OAuth login/signup
 // @access  Public
-router.post('/facebook', async (req, res) => {
+// FIX: Added authLimiter
+router.post('/facebook', authLimiter, async (req, res) => {
   try {
     const { facebookId, email, name, profilePicture } = req.body;
 
@@ -701,4 +706,4 @@ router.post('/facebook', async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = router; 
