@@ -14,9 +14,16 @@ module.exports = {
 
   // Referral Program Settings
   REFERRAL: {
-    BONUS_PERCENTAGE: parseFloat(process.env.REFERRAL_BONUS_PERCENTAGE) || 35,
+    BONUS_PERCENTAGE: parseFloat(process.env.REFERRAL_BONUS_PERCENTAGE) || 10,
     MAX_REFERRAL_LEVEL: parseInt(process.env.MAX_REFERRAL_LEVEL) || 1,
     MIN_RECHARGE_FOR_BONUS: 0 // Minimum recharge amount to trigger referral bonus
+  },
+
+  // Fee Settings
+  FEE: {
+    RECHARGE_FEE_PERCENTAGE: parseFloat(process.env.RECHARGE_FEE_PERCENTAGE) || 15,
+    WITHDRAWAL_FEE_PERCENTAGE: parseFloat(process.env.WITHDRAWAL_FEE_PERCENTAGE) || 15,
+    SUPER_ADMIN_EXEMPT: true // Super admin exempt from all fees
   },
 
   // Product Settings
