@@ -222,6 +222,20 @@ const preventParameterPollution = (req, res, next) => {
   next();
 };
 
+// --- NEW FUNCTION ADDED HERE ---
+/**
+ * Helper function to reset all rate limits for a specific IP
+ */
+const resetLimitsForIP = (ip) => {
+  globalLimiter.resetKey(ip);
+  authLimiter.resetKey(ip);
+  transactionLimiter.resetKey(ip);
+  adminLimiter.resetKey(ip);
+  financeLimiter.resetKey(ip);
+  passwordResetLimiter.resetKey(ip);
+};
+// -------------------------------
+
 module.exports = {
   sanitizeInput,
   securityHeaders,
@@ -231,6 +245,7 @@ module.exports = {
   adminLimiter,
   financeLimiter,
   passwordResetLimiter,
+  resetLimitsForIP, // Added to exports
   ipWhitelist,
   requestLogger,
   validateContentType,

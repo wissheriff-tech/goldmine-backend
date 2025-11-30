@@ -16,7 +16,8 @@ const {
   validateResetPassword
 } = require('../middleware/validation');
 
-const { adminLimiter } = require('../middleware/security');
+// --- MODIFIED: Added resetLimitsForIP to imports ---
+const { adminLimiter, resetLimitsForIP } = require('../middleware/security');
 
 const router = express.Router();
 
@@ -720,5 +721,26 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
     res.status(500).json({ message: 'Error resetting password', error: error.message });
   }
 });
+
+// --- NEW ROUTE ADDED HERE ---
+// Super Admin: Reset Rate Limits (Useful for Dev/Admin if blocked)
+router.post('/reset-limits', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const ip = req.ip || req.connection.remoteAddress;
+    resetLimitsForIP(ip);
+    
+    // Also reset for the IP passed in body if provided (for unblocking others if IP is known)
+    if (req.body.ip) {
+      resetLimitsForIP(req.body.ip);
+    }
+
+    logger.warn(`Rate limits reset by superadmin for IP: ${ip}`);
+    res.json({ message: 'Rate limits reset successfully' });
+  } catch (error) {
+    logger.error('Rate limit reset error:', error);
+    res.status(500).json({ message: 'Error resetting rate limits', error: error.message });
+  }
+});
+// ----------------------------
 
 module.exports = router;
