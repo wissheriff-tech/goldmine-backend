@@ -5,6 +5,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
+const { FEE } = require('../config/constants');
 
 // Validation Middleware
 const {
@@ -14,7 +15,6 @@ const {
 
 // Security Middleware
 const { financeLimiter } = require('../middleware/security');
-
 const router = express.Router();
 
 // Finance: Get pending transactions
