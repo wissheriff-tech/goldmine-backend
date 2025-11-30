@@ -88,13 +88,12 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
       if (rechargeFee > 0) {
         transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${FEE.RECHARGE_FEE_PERCENTAGE}%)`;
       }
-      // Removed: user.balance_usdt += transaction.amount_usdt;
+      // Note: We deliberately do not update balance_usdt here as it is not a store of value
     } else if (transaction.type === 'withdrawal') {
       if (user.balance_NSL < transaction.amount_NSL) {
         return res.status(400).json({ message: 'Insufficient balance for withdrawal' });
       }
       user.balance_NSL -= transaction.amount_NSL;
-      // Removed: user.balance_usdt -= transaction.amount_usdt;
     }
 
     transaction.status = 'approved';
@@ -485,4 +484,4 @@ router.get('/activity-log', authenticate, authorize(['superadmin']), async (req,
   }
 });
 
-module.exports = router;
+module.exports = router; 
