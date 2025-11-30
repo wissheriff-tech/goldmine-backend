@@ -15,6 +15,12 @@ const {
   validateUpdateProduct
 } = require('../middleware/validation');
 
+// Security Middleware
+const { 
+  transactionLimiter, 
+  adminLimiter 
+} = require('../middleware/security');
+
 const router = express.Router();
 
 // Get all products
@@ -29,7 +35,8 @@ router.get('/', async (req, res) => {
 });
 
 // Buy product
-router.post('/buy', authenticate, validateBuyProduct, async (req, res) => {
+// Added transactionLimiter to prevent purchase spamming
+router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async (req, res) => {
   try {
     const { product_id } = req.body;
     const user = await User.findById(req.user.id).populate('products.product_id');
@@ -84,9 +91,12 @@ router.post('/buy', authenticate, validateBuyProduct, async (req, res) => {
 
     for (const userProduct of activeProducts) {
       const prod = userProduct.product_id;
-      const prodName = prod.name || prod;
-      if (vipLevels.indexOf(prodName) > vipLevels.indexOf(highestVip)) {
-        highestVip = prodName;
+      // Handle case where product might not be populated correctly
+      if (prod) {
+        const prodName = prod.name || prod;
+        if (vipLevels.indexOf(prodName) > vipLevels.indexOf(highestVip)) {
+          highestVip = prodName;
+        }
       }
     }
 
@@ -110,14 +120,14 @@ router.post('/buy', authenticate, validateBuyProduct, async (req, res) => {
       const referrer = await User.findOne({ referral_code: user.referred_by });
 
       if (referrer) {
-        // Check if referral bonus has already been paid
+        // Check if referral bonus has already been paid for this user
         const existingBonus = await Referral.findOne({
           referrer_id: referrer._id,
           referred_id: user._id,
           status: 'paid'
         });
 
-        // Only pay bonus if this is the first purchase
+        // Only pay bonus if this is the first purchase (no existing bonus paid)
         if (!existingBonus) {
           const bonusPercentage = parseInt(process.env.REFERRAL_BONUS_PERCENTAGE || 35);
           const bonusAmount = (product.price_NSL * bonusPercentage) / 100;
@@ -198,7 +208,8 @@ router.post('/buy', authenticate, validateBuyProduct, async (req, res) => {
 });
 
 // Admin: Create product
-router.post('/', authenticate, authorize(['superadmin', 'admin']), validateCreateProduct, async (req, res) => {
+// Added adminLimiter
+router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateCreateProduct, async (req, res) => {
   try {
     const { name, price_NSL, price_usdt, daily_income_NSL, validity_days, description, benefits } = req.body;
 
@@ -232,7 +243,8 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), validateCreat
 });
 
 // Admin: Update product
-router.patch('/:id', authenticate, authorize(['superadmin', 'admin']), validateUpdateProduct, async (req, res) => {
+// Added adminLimiter
+router.patch('/:id', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateUpdateProduct, async (req, res) => {
   try {
     const { price_NSL, price_usdt, daily_income_NSL, active, description, benefits } = req.body;
     const product = await Product.findByIdAndUpdate(
