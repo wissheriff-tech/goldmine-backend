@@ -40,7 +40,7 @@ const securityHeaders = helmet({
  * Prevents brute force attacks by limiting requests per IP
  */
 const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 5 * 60 * 1000, // 5 minutes
   max: 100, // Limit each IP to 100 requests per windowMs
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
@@ -59,7 +59,7 @@ const globalLimiter = rateLimit({
  * Stricter limits for login/signup to prevent brute force
  */
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 5 * 60 * 1000, // 5 minutes
   max: 20, // Limit each IP to 20 login attempts per windowMs (increased for testing)
   skipSuccessfulRequests: true,
   message: 'Too many authentication attempts. Please try again later.',
@@ -111,7 +111,7 @@ const adminLimiter = rateLimit({
  * Limits finance operations to prevent errors
  */
 const financeLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 5 * 60 * 1000, // 5 minutes
   max: 30, // 30 requests per 15 minutes
   message: 'Too many finance operations. Please slow down.',
   handler: (req, res) => {

@@ -1,5 +1,6 @@
 const express = require('express');
 const User = require('../models/User');
+const bcrypt = require('bcryptjs');
 const Transaction = require('../models/Transaction');
 const Product = require('../models/Product');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -246,6 +247,88 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
 });
 
 // Admin: Delete user
+
+// Super Admin: Create admin/superadmin users
+router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
+  try {
+    const { username, phone, email, password, role } = req.body;
+
+    // Validate required fields
+    if (!username || !phone || !password || !role) {
+      return res.status(400).json({
+        message: 'Username, phone, password, and role are required'
+      });
+    }
+
+    // Validate role - only allow admin-related roles
+    const allowedRoles = ['superadmin', 'admin', 'finance', 'verificator', 'approval'];
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({
+        message: `Invalid role. Allowed roles: ${allowedRoles.join(', ')}`
+      });
+    }
+
+    // Check if user already exists
+    const userExists = await User.findOne({ $or: [{ phone }, { username }] });
+    if (userExists) {
+      return res.status(400).json({
+        message: 'User with this phone or username already exists'
+      });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Generate referral code
+    const referral_code = Math.random().toString(36).substring(2, 12).toUpperCase();
+
+    // Create admin user
+    const adminUser = new User({
+      username,
+      phone,
+      email: email || `${username}@salonmoney.com`,
+      password: hashedPassword,
+      referral_code,
+      role,
+      status: 'active',
+      email_verified: true,
+      phone_verified: true,
+      balance_NSL: 0,
+      balance_usdt: 0
+    });
+
+    await adminUser.save();
+
+    logger.info(`New ${role} created by superadmin ${req.user.phone}: ${username} (${phone})`);
+
+    res.status(201).json({
+      success: true,
+      message: `${role.charAt(0).toUpperCase() + role.slice(1)} user created successfully`,
+      user: {
+        id: adminUser._id,
+        username: adminUser.username,
+        phone: adminUser.phone,
+        email: adminUser.email,
+        role: adminUser.role,
+        referral_code: adminUser.referral_code,
+        status: adminUser.status
+      },
+      credentials: {
+        username: username,
+        password: password,
+        note: 'Please save these credentials and share them securely with the new admin'
+      }
+    });
+  } catch (error) {
+    logger.error('Admin creation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating admin user',
+      error: error.message
+    });
+  }
+});
+
 router.delete('/users/:id', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
     const user = await User.findById(req.params.id);
