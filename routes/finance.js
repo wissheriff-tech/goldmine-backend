@@ -68,7 +68,26 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
     // CRITICAL FIX: Only update NSL balance, not USDT
     // USDT is just a conversion for display purposes
     if (transaction.type === 'recharge') {
-      user.balance_NSL += transaction.amount_NSL;
+      // Apply 15% fee for standard users, no fee for super admin
+      let creditAmount = transaction.amount_NSL;
+      let rechargeFee = 0;
+
+      if (user.role !== 'superadmin') {
+        // Standard user - apply 15% fee
+        rechargeFee = (transaction.amount_NSL * FEE.RECHARGE_FEE_PERCENTAGE) / 100;
+        creditAmount = transaction.amount_NSL - rechargeFee;
+      }
+      // Super admin gets full amount (no fee)
+
+      user.balance_NSL += creditAmount;
+
+      // Log fee details
+      logger.info(`Recharge approved: User ${user.phone}, Amount: ${transaction.amount_NSL} NSL, Fee: ${rechargeFee.toFixed(2)} NSL, Credited: ${creditAmount.toFixed(2)} NSL`);
+
+      // Update transaction notes with fee info
+      if (rechargeFee > 0) {
+        transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${FEE.RECHARGE_FEE_PERCENTAGE}%)`;
+      }
       // Removed: user.balance_usdt += transaction.amount_usdt;
     } else if (transaction.type === 'withdrawal') {
       if (user.balance_NSL < transaction.amount_NSL) {
