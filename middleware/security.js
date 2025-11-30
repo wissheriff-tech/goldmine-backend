@@ -60,7 +60,7 @@ const globalLimiter = rateLimit({
  */
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // Limit each IP to 5 login attempts per windowMs
+  max: 20, // Limit each IP to 20 login attempts per windowMs (increased for testing)
   skipSuccessfulRequests: true,
   message: 'Too many authentication attempts. Please try again later.',
   handler: (req, res) => {
