@@ -1,5 +1,6 @@
 const express = require('express');
 const User = require('../models/User');
+const { FEE } = require('../config/constants');
 const Transaction = require('../models/Transaction');
 const Referral = require('../models/Referral');
 const Product = require('../models/Product');
@@ -180,13 +181,16 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
 router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
   try {
     const { amount_NSL } = req.body;
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
     if (!amount_NSL || amount_NSL <= 0) {
       return res.status(400).json({ message: 'Invalid amount' });
     }
 
-    const feePercentage = parseFloat(process.env.WITHDRAWAL_FEE_PERCENTAGE || 2.5);
-    const fixedFee = parseFloat(process.env.WITHDRAWAL_FIXED_FEE_NSL || 10);
     const minWithdrawal = parseInt(process.env.MIN_WITHDRAWAL_AMOUNT_NSL || 100);
 
     if (amount_NSL < minWithdrawal) {
@@ -196,18 +200,24 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
       });
     }
 
-    const percentageFee = (amount_NSL * feePercentage) / 100;
-    const totalFee = percentageFee + fixedFee;
-    const netAmount = amount_NSL - totalFee;
+    // Calculate fee: 15% for standard users, 0% for super admin
+    let withdrawalFee = 0;
+    let netAmount = amount_NSL;
+
+    if (user.role !== 'superadmin') {
+      withdrawalFee = (amount_NSL * FEE.WITHDRAWAL_FEE_PERCENTAGE) / 100;
+      netAmount = amount_NSL - withdrawalFee;
+    }
+
     const amount_usdt = (netAmount / parseInt(process.env.USDT_TO_NSL_WITHDRAWAL || 25)).toFixed(2);
 
     res.json({
       requested_amount_NSL: amount_NSL,
+      user_role: user.role,
       fee_breakdown: {
-        percentage_fee_rate: `${feePercentage}%`,
-        percentage_fee_amount: percentageFee.toFixed(2),
-        fixed_fee: fixedFee,
-        total_fee: totalFee.toFixed(2)
+        fee_percentage: user.role === 'superadmin' ? '0%' : `${FEE.WITHDRAWAL_FEE_PERCENTAGE}%`,
+        fee_amount: withdrawalFee.toFixed(2),
+        is_exempt: user.role === 'superadmin'
       },
       net_amount_NSL: netAmount.toFixed(2),
       net_amount_usdt: amount_usdt,
@@ -238,14 +248,17 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
       return res.status(400).json({ message: `Minimum withdrawal amount is ${minWithdrawal} NSL` });
     }
 
-    // Calculate withdrawal fee
-    const feePercentage = parseFloat(process.env.WITHDRAWAL_FEE_PERCENTAGE || 2.5);
-    const fixedFee = parseFloat(process.env.WITHDRAWAL_FIXED_FEE_NSL || 10);
+    // Calculate withdrawal fee (15% for standard users, 0% for super admin)
+    let withdrawalFee = 0;
+    let netAmount = amount_NSL;
 
-    // Fee is percentage of amount + fixed fee
-    const percentageFee = (amount_NSL * feePercentage) / 100;
-    const totalFee = percentageFee + fixedFee;
-    const netAmount = amount_NSL - totalFee;
+    if (user.role !== 'superadmin') {
+      // Standard user - apply 15% fee
+      withdrawalFee = (amount_NSL * FEE.WITHDRAWAL_FEE_PERCENTAGE) / 100;
+      netAmount = amount_NSL - withdrawalFee;
+    }
+    // Super admin pays no fee, gets full amount
+
     const totalDeduction = amount_NSL; // Total amount deducted from balance
 
     // Check if user has sufficient balance (including fee)
@@ -255,9 +268,10 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
         required_balance: totalDeduction,
         current_balance: user.balance_NSL,
         fee_breakdown: {
-          percentage_fee: percentageFee.toFixed(2),
-          fixed_fee: fixedFee,
-          total_fee: totalFee.toFixed(2)
+          withdrawal_amount: amount_NSL,
+          fee_percentage: user.role === 'superadmin' ? '0%' : `${FEE.WITHDRAWAL_FEE_PERCENTAGE}%`,
+          fee_amount: withdrawalFee.toFixed(2),
+          net_amount: netAmount.toFixed(2)
         }
       });
     }
@@ -277,11 +291,11 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
       withdrawal_address,
       withdrawal_network: network || 'BSC',
       payment_method: 'binance',
-      notes: `Withdrawal: ${amount_NSL} NSL (Fee: ${totalFee.toFixed(2)} NSL, Net: ${netAmount.toFixed(2)} NSL) to ${withdrawal_address}`
+      notes: `Withdrawal: ${amount_NSL} NSL (Fee: ${withdrawalFee.toFixed(2)} NSL, Net: ${netAmount.toFixed(2)} NSL) to ${withdrawal_address}`
     });
 
     await transaction.save();
-    logger.info(`Withdrawal requested: ${user.phone || user._id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${totalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
+    logger.info(`Withdrawal requested: ${user.phone || user._id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
 
     res.status(201).json({
       message: 'Withdrawal request submitted! Finance admin will process your withdrawal within 24 hours.',
