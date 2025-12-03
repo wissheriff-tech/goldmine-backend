@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-const User = require('../models/User');
+// FIX 1: Corrected path from '../models/User' to '../../models/User'
+const User = require('../../models/User');
 
 dotenv.config();
 
@@ -32,17 +33,17 @@ const createSuperAdmin = async () => {
     if (existingSuperAdmin) {
       console.log('\n⚠️  Super admin already exists!');
       console.log('Username:', existingSuperAdmin.username);
-      console.log('Email:', existingSuperAdmin.email);
-      console.log('Phone:', existingSuperAdmin.phone);
-      console.log('Role:', existingSuperAdmin.role);
-      console.log('Status:', existingSuperAdmin.status);
-
+      
       // Update to ensure they have all privileges
       existingSuperAdmin.role = 'superadmin';
       existingSuperAdmin.status = 'active';
       existingSuperAdmin.kyc_verified = true;
       existingSuperAdmin.emailVerified = true;
       existingSuperAdmin.authProvider = 'local';
+      
+      // FIX 2: Force password update (This fixes your login issue)
+      // This triggers the pre-save hook in the User model which hashes the password
+      existingSuperAdmin.password_hash = superAdminPassword;
 
       // Update email and username if they don't have them
       if (!existingSuperAdmin.username) {
@@ -54,7 +55,7 @@ const createSuperAdmin = async () => {
 
       await existingSuperAdmin.save();
 
-      console.log('\n✅ Super admin updated successfully with all privileges!');
+      console.log('\n✅ Super admin updated successfully with all privileges AND password reset!');
     } else {
       // Create new super admin
       const superAdmin = new User({
@@ -73,29 +74,23 @@ const createSuperAdmin = async () => {
         twoFactorEnabled: false
       });
 
-      // Generate referral code
-      superAdmin.referral_code = superAdmin.generateReferralCode();
+      // Generate referral code safely
+      if (typeof superAdmin.generateReferralCode === 'function') {
+         superAdmin.referral_code = superAdmin.generateReferralCode();
+      } else {
+         superAdmin.referral_code = 'ADMIN' + Math.floor(Math.random() * 10000);
+      }
 
       await superAdmin.save();
 
       console.log('\n✅ Super Admin Created Successfully!');
-      console.log('=====================================');
-      console.log('Username:', superAdmin.username);
-      console.log('Email:', superAdmin.email);
-      console.log('Phone:', superAdmin.phone);
-      console.log('Password:', superAdminPassword);
-      console.log('Role:', superAdmin.role);
-      console.log('Status:', superAdmin.status);
-      console.log('VIP Level:', superAdmin.vip_level);
-      console.log('Referral Code:', superAdmin.referral_code);
-      console.log('Email Verified:', superAdmin.emailVerified);
-      console.log('KYC Verified:', superAdmin.kyc_verified);
-      console.log('=====================================');
-      console.log('\n🔐 Login Credentials:');
-      console.log('Username:', superAdmin.username);
-      console.log('Password:', superAdminPassword);
-      console.log('\nYou can login at: http://localhost:3000/login');
     }
+
+    console.log('=====================================');
+    console.log('\n🔐 Login Credentials:');
+    console.log('Username:', superAdminUsername);
+    console.log('Password:', superAdminPassword);
+    console.log('\nYou can login at: http://localhost:3000/login');
 
     // Close connection
     await mongoose.connection.close();
