@@ -1,0 +1,154 @@
+[
+  {
+    "name": "VIP1",
+    "description": "Entry Level VIP - Start your journey",
+    "price_NSL": 100,
+    "price_usdt": 4.35,
+    "daily_income_NSL": 5,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 5 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "Basic support"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "name": "VIP2",
+    "description": "Silver VIP - Enhanced benefits",
+    "price_NSL": 500,
+    "price_usdt": 21.74,
+    "daily_income_NSL": 28,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 28 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "Priority support",
+      "5% bonus on recharge"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "name": "VIP3",
+    "description": "Gold VIP - Premium experience",
+    "price_NSL": 1500,
+    "price_usdt": 65.22,
+    "daily_income_NSL": 90,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 90 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "VIP support",
+      "10% bonus on recharge",
+      "Exclusive features"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "name": "VIP4",
+    "description": "Platinum VIP - Elite status",
+    "price_NSL": 3500,
+    "price_usdt": 152.17,
+    "daily_income_NSL": 220,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 220 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "Dedicated support",
+      "15% bonus on recharge",
+      "Early access to features"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "name": "VIP5",
+    "description": "Diamond VIP - Luxury tier",
+    "price_NSL": 8000,
+    "price_usdt": 347.83,
+    "daily_income_NSL": 520,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 520 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "24/7 support",
+      "20% bonus on recharge",
+      "Premium features"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "name": "VIP6",
+    "description": "Crown VIP - Supreme benefits",
+    "price_NSL": 15000,
+    "price_usdt": 652.17,
+    "daily_income_NSL": 1050,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 1050 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "Personal account manager",
+      "25% bonus on recharge",
+      "All premium features"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "name": "VIP7",
+    "description": "Royal VIP - Exclusive privileges",
+    "price_NSL": 30000,
+    "price_usdt": 1304.35,
+    "daily_income_NSL": 2250,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 2250 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "VIP account manager",
+      "30% bonus on recharge",
+      "Beta features access",
+      "Priority withdrawals"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "name": "VIP8",
+    "description": "Imperial VIP - Ultimate experience",
+    "price_NSL": 60000,
+    "price_usdt": 2608.70,
+    "daily_income_NSL": 4800,
+    "validity_days": 60,
+    "benefits": [
+      "Daily income: 4800 NSL",
+      "Valid for 60 days",
+      "Auto-renewal option",
+      "Dedicated VIP team",
+      "35% bonus on recharge",
+      "All features unlocked",
+      "Instant withdrawals",
+      "Custom limits"
+    ],
+    "active": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  }
+]

@@ -1,0 +1,110 @@
+[
+  {
+    "currency_code": "USD",
+    "currency_name": "US Dollar",
+    "rate_to_usd": 1.0,
+    "rate_to_nsl": 23,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "EUR",
+    "currency_name": "Euro",
+    "rate_to_usd": 1.08,
+    "rate_to_nsl": 24.84,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "GBP",
+    "currency_name": "British Pound",
+    "rate_to_usd": 1.27,
+    "rate_to_nsl": 29.21,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "JPY",
+    "currency_name": "Japanese Yen",
+    "rate_to_usd": 0.0067,
+    "rate_to_nsl": 0.1541,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "CNY",
+    "currency_name": "Chinese Yuan",
+    "rate_to_usd": 0.14,
+    "rate_to_nsl": 3.22,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "AED",
+    "currency_name": "UAE Dirham",
+    "rate_to_usd": 0.27,
+    "rate_to_nsl": 6.21,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "CAD",
+    "currency_name": "Canadian Dollar",
+    "rate_to_usd": 0.71,
+    "rate_to_nsl": 16.33,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "AUD",
+    "currency_name": "Australian Dollar",
+    "rate_to_usd": 0.63,
+    "rate_to_nsl": 14.49,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "INR",
+    "currency_name": "Indian Rupee",
+    "rate_to_usd": 0.012,
+    "rate_to_nsl": 0.276,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "NGN",
+    "currency_name": "Nigerian Naira",
+    "rate_to_usd": 0.00063,
+    "rate_to_nsl": 0.01449,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "ZAR",
+    "currency_name": "South African Rand",
+    "rate_to_usd": 0.054,
+    "rate_to_nsl": 1.242,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  },
+  {
+    "currency_code": "SLL",
+    "currency_name": "Sierra Leonean Leone",
+    "rate_to_usd": 0.000048,
+    "rate_to_nsl": 0.001104,
+    "enabled": true,
+    "created_at": { "$date": "2025-01-01T00:00:00.000Z" },
+    "updated_at": { "$date": "2025-01-01T00:00:00.000Z" }
+  }
+]
