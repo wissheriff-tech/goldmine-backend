@@ -135,36 +135,40 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
       return res.status(404).json({ message: 'User not found' });
     }
 
-    if (amount_NSL <= 0) {
+    // Ensure amount_NSL is a valid number
+    const amountNSL = Number(amount_NSL);
+    if (isNaN(amountNSL) || amountNSL <= 0) {
       return res.status(400).json({ message: 'Invalid amount' });
     }
 
-    if (amount_NSL < 100) {
+    if (amountNSL < 100) {
       return res.status(400).json({ message: 'Minimum recharge amount is 100 NSL' });
     }
 
-    const amount_usdt = (amount_NSL / parseInt(process.env.NSL_TO_USDT_RECHARGE || 25)).toFixed(2);
+    // Calculate amount_usdt as a number, not string
+    const conversionRate = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
+    const amount_usdt = parseFloat((amountNSL / conversionRate).toFixed(2));
 
     const transaction = new Transaction({
       user_id: user._id,
       type: 'recharge',
-      amount_NSL,
+      amount_NSL: amountNSL,
       amount_usdt,
       status: 'pending',
       payment_method: payment_method || 'binance',
       deposit_address,
       binance_tx_id: tx_hash,
-      notes: `Recharge request for ${amount_NSL} NSL via ${payment_method || 'Binance'}`
+      notes: `Recharge request for ${amountNSL} NSL via ${payment_method || 'Binance'}`
     });
 
     await transaction.save();
-    logger.info(`Recharge requested: ${user.phone || user._id} - ${amount_NSL} NSL via ${payment_method}`);
+    logger.info(`Recharge requested: ${user.phone || user._id} - ${amountNSL} NSL via ${payment_method}`);
 
     res.status(201).json({
       message: 'Recharge request submitted successfully! Finance admin will verify and approve your payment.',
       transaction: {
         id: transaction._id,
-        amount_NSL,
+        amount_NSL: amountNSL,
         amount_usdt,
         status: 'pending',
         payment_method,

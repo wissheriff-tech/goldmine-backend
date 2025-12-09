@@ -142,16 +142,22 @@ router.patch('/users/:id/status', authenticate, authorize(['superadmin']), admin
 router.patch('/users/:id/balance', authenticate, authorize(['superadmin']), adminLimiter, validateUpdateBalance, async (req, res) => {
   try {
     const { balance_NSL, balance_usdt, reason } = req.body;
-    const user = await User.findById(req.params.id);
+
+    // Build update object
+    const updateData = {};
+    if (balance_NSL !== undefined) updateData.balance_NSL = balance_NSL;
+    if (balance_usdt !== undefined) updateData.balance_usdt = balance_usdt;
+
+    // Use findByIdAndUpdate to avoid triggering password hashing middleware
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true, runValidators: true }
+    ).select('-password_hash');
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
-
-    if (balance_NSL !== undefined) user.balance_NSL = balance_NSL;
-    if (balance_usdt !== undefined) user.balance_usdt = balance_usdt;
-
-    await user.save();
 
     logger.warn(`Balance adjusted for ${user.phone}: NSL=${balance_NSL}, USDT=${balance_usdt}, Reason: ${reason}`);
 
