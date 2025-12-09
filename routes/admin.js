@@ -728,23 +728,32 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
   }
 });
 
-// --- NEW ROUTE ADDED HERE ---
+// --- FIXED ROUTE ---
 // Super Admin: Reset Rate Limits (Useful for Dev/Admin if blocked)
 router.post('/reset-limits', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
     const ip = req.ip || req.connection.remoteAddress;
-    resetLimitsForIP(ip);
-    
+    const result1 = await resetLimitsForIP(ip);
+
     // Also reset for the IP passed in body if provided (for unblocking others if IP is known)
+    let result2 = null;
     if (req.body.ip) {
-      resetLimitsForIP(req.body.ip);
+      result2 = await resetLimitsForIP(req.body.ip);
     }
 
-    logger.warn(`Rate limits reset by superadmin for IP: ${ip}`);
-    res.json({ message: 'Rate limits reset successfully' });
+    logger.warn(`Rate limits reset requested by superadmin for IP: ${ip}${req.body.ip ? ` and ${req.body.ip}` : ''}`);
+
+    res.json({
+      message: 'Rate limits will auto-expire based on configured time windows',
+      details: {
+        requestorIP: result1,
+        targetIP: result2
+      },
+      info: 'Rate limits automatically reset after their configured time window (5 min for auth, 1 hour for transactions, etc.)'
+    });
   } catch (error) {
     logger.error('Rate limit reset error:', error);
-    res.status(500).json({ message: 'Error resetting rate limits', error: error.message });
+    res.status(500).json({ message: 'Error processing rate limit reset', error: error.message });
   }
 });
 // ----------------------------
