@@ -1,9 +1,22 @@
 const mongoose = require('mongoose');
-const Product = require('../models/Product');
+const Product = require('../../models/Product');
 require('dotenv').config();
 
-// VIP Product definitions with progressive benefits
+// VIP Product definitions with progressive benefits (VIP0 - VIP9)
 const vipProducts = [
+  {
+    name: 'VIP0',
+    description: 'Starter package - Begin your investment journey with minimal risk.',
+    price_NSL: 500,
+    daily_income_NSL: 15,
+    validity_days: 60,
+    benefits: [
+      'Basic customer support',
+      'Daily income tracking',
+      'Email notifications',
+      'Transaction history access'
+    ]
+  },
   {
     name: 'VIP1',
     description: 'Entry-level VIP package perfect for beginners. Start your investment journey with daily returns.',
@@ -118,6 +131,25 @@ const vipProducts = [
       'Private investment opportunities',
       'Priority access to everything',
       'Annual performance bonus'
+    ]
+  },
+  {
+    name: 'VIP9',
+    description: 'Legend package - The absolute peak of investment excellence. Reserved for elite investors.',
+    price_NSL: 1000000,
+    daily_income_NSL: 85000,
+    validity_days: 60,
+    benefits: [
+      'All VIP8 benefits',
+      'Supreme lifetime support',
+      'Dedicated investment team',
+      'Custom VIP9 diamond badge',
+      'Private CEO meetings',
+      'Bespoke investment strategies',
+      'First access to all features',
+      'Quarterly performance bonuses',
+      'White-glove concierge service',
+      'Legacy account status'
     ]
   }
 ];

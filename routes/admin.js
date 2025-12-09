@@ -728,6 +728,71 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
   }
 });
 
+// --- NEW ROUTE: Get Rate Limit Info ---
+// Super Admin: Get rate limit information
+router.get('/rate-limit-info', authenticate, authorize(['superadmin']), (req, res) => {
+  try {
+    const ip = req.ip || req.connection.remoteAddress;
+
+    // Rate limit configuration info
+    const rateLimitInfo = {
+      currentIP: ip,
+      limiters: [
+        {
+          name: 'Global API Limiter',
+          window: '5 minutes',
+          maxRequests: 1000,
+          description: 'Overall API request limit',
+          autoResetTime: '5 minutes'
+        },
+        {
+          name: 'Authentication Limiter',
+          window: '5 minutes',
+          maxRequests: 100,
+          description: 'Login/signup attempts',
+          autoResetTime: '5 minutes',
+          skipSuccessful: true
+        },
+        {
+          name: 'Transaction Limiter',
+          window: '1 hour',
+          maxRequests: 100,
+          description: 'Recharge/withdrawal requests',
+          autoResetTime: '1 hour'
+        },
+        {
+          name: 'Admin Actions Limiter',
+          window: '1 minute',
+          maxRequests: 60,
+          description: 'Admin operations',
+          autoResetTime: '1 minute'
+        },
+        {
+          name: 'Finance Limiter',
+          window: '5 minutes',
+          maxRequests: 60,
+          description: 'Finance operations',
+          autoResetTime: '5 minutes'
+        },
+        {
+          name: 'Password Reset Limiter',
+          window: '1 hour',
+          maxRequests: 10,
+          description: 'Password reset requests',
+          autoResetTime: '1 hour'
+        }
+      ],
+      note: 'Rate limits automatically reset after their window time',
+      resetEndpoint: 'POST /api/admin/reset-limits'
+    };
+
+    res.json(rateLimitInfo);
+  } catch (error) {
+    logger.error('Rate limit info error:', error);
+    res.status(500).json({ message: 'Error fetching rate limit info', error: error.message });
+  }
+});
+
 // --- FIXED ROUTE ---
 // Super Admin: Reset Rate Limits (Useful for Dev/Admin if blocked)
 router.post('/reset-limits', authenticate, authorize(['superadmin']), async (req, res) => {

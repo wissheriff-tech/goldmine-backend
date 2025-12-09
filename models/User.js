@@ -45,7 +45,7 @@ const userSchema = new mongoose.Schema({
   },
   vip_level: {
     type: String,
-    enum: ['VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9', 'none'],
+    enum: ['VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9', 'none'],
     default: 'none'
   },
   products: [
