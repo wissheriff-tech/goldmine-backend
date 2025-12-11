@@ -89,7 +89,6 @@ const userSchema = new mongoose.Schema({
     selfie: String,
     additional: String
   },
-  kyc_document: String, // Legacy field - kept for backward compatibility
   created_at: {
     type: Date,
     default: Date.now

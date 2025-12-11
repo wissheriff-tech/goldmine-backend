@@ -9,7 +9,8 @@ const rateLimit = require('express-rate-limit');
 const sanitizeInput = mongoSanitize({
   replaceWith: '_',
   onSanitize: ({ req, key }) => {
-    console.warn(`Potential NoSQL injection attempt detected. Field: ${key}`);
+    const logger = require('../utils/logger');
+    logger.warn(`Potential NoSQL injection attempt detected. Field: ${key}`);
   }
 });
 
@@ -41,7 +42,7 @@ const securityHeaders = helmet({
  */
 const globalLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 1000, // INCREASED FOR DEV: Limit each IP to 1000 requests per windowMs
+  max: 150, // Limit each IP to 150 requests per 5 minutes
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -60,7 +61,7 @@ const globalLimiter = rateLimit({
  */
 const authLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 100, // INCREASED FOR DEV: Limit each IP to 100 login attempts per windowMs
+  max: 15, // Limit each IP to 15 authentication attempts per 5 minutes
   skipSuccessfulRequests: true,
   message: 'Too many authentication attempts. Please try again later.',
   handler: (req, res) => {
@@ -78,7 +79,7 @@ const authLimiter = rateLimit({
  */
 const transactionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 100, // INCREASED FOR DEV: Limit each user to 100 transactions per hour
+  max: 30, // Limit each user to 30 transactions per hour
   message: 'Too many transaction requests. Please try again later.',
   handler: (req, res) => {
     res.status(429).json({
@@ -95,7 +96,7 @@ const transactionLimiter = rateLimit({
  */
 const adminLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 60, // INCREASED FOR DEV: 60 requests per minute
+  max: 30, // 30 admin requests per minute
   message: 'Too many admin operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -112,7 +113,7 @@ const adminLimiter = rateLimit({
  */
 const financeLimiter = rateLimit({
   windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 60, // INCREASED FOR DEV: 60 requests per 5 minutes
+  max: 30, // 30 finance requests per 5 minutes
   message: 'Too many finance operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -129,7 +130,7 @@ const financeLimiter = rateLimit({
  */
 const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10, // INCREASED FOR DEV: Maximum 10 password reset requests per hour
+  max: 5, // Maximum 5 password reset requests per hour
   message: 'Too many password reset attempts.',
   handler: (req, res) => {
     res.status(429).json({
@@ -230,14 +231,15 @@ const preventParameterPollution = (req, res, next) => {
  * Rate limits will auto-expire based on windowMs.
  */
 const resetLimitsForIP = async (ip) => {
+  const logger = require('../utils/logger');
   try {
     // In express-rate-limit v6+, we can't directly reset keys
     // Instead, we return a success response
     // The limits will auto-reset after their windowMs period
-    console.log(`Rate limit reset requested for IP: ${ip} (limits will auto-expire)`);
+    logger.info(`Rate limit reset requested for IP: ${ip} (limits will auto-expire)`);
     return { success: true, message: 'Rate limits will auto-expire based on configured windows' };
   } catch (error) {
-    console.error('Error in resetLimitsForIP:', error);
+    logger.error('Error in resetLimitsForIP:', error);
     return { success: false, message: error.message };
   }
 };
