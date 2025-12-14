@@ -1,0 +1,86 @@
+# ============================================
+# Docker Ignore File for SalonMoney Backend
+# ============================================
+
+# Node modules (will be installed in Docker)
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# Environment files (set via Coolify)
+.env
+.env.local
+.env.production
+.env.development
+.env.test
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test files
+__tests__/
+*.test.js
+jest.config.js
+coverage/
+.nyc_output/
+
+# Documentation
+README.md
+CHANGELOG.md
+docs/
+
+# Build files
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Uploads (will be handled via volumes in production)
+uploads/profiles/*
+uploads/documents/*
+!uploads/profiles/.gitkeep
+!uploads/documents/.gitkeep
+
+# Scripts (not needed in production)
+scripts/admin/
+scripts/seed/
+scripts/*.js
+
+# Development tools
+nodemon.json
+.eslintrc*
+.prettierrc*
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Docker files
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
