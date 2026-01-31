@@ -1,246 +1,220 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
 const bcrypt = require('bcryptjs');
+const { sequelize } = require('../config/database');
 
-const userSchema = new mongoose.Schema({
+const User = sequelize.define('User', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   username: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING,
+    allowNull: false,
     unique: true,
-    trim: true,
-    lowercase: true
+    set(val) {
+      this.setDataValue('username', val ? val.trim().toLowerCase() : val);
+    }
   },
   phone: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING(50),
+    allowNull: false,
     unique: true,
-    trim: true
+    set(val) {
+      this.setDataValue('phone', val ? val.trim() : val);
+    }
   },
   password_hash: {
-    type: String,
-    required: true
+    type: DataTypes.STRING,
+    allowNull: false
   },
   role: {
-    type: String,
-    enum: ['user', 'admin', 'superadmin', 'finance', 'verificator', 'approval'],
-    default: 'user'
+    type: DataTypes.ENUM('user', 'admin', 'superadmin', 'finance', 'verificator', 'approval'),
+    defaultValue: 'user'
   },
   referral_code: {
-    type: String,
+    type: DataTypes.STRING(50),
     unique: true,
-    sparse: true
+    allowNull: true
   },
   referred_by: {
-    type: String,
-    default: null
+    type: DataTypes.STRING(50),
+    allowNull: true,
+    defaultValue: null
   },
   balance_NSL: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.DECIMAL(18, 4),
+    defaultValue: 0,
+    get() {
+      const val = this.getDataValue('balance_NSL');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   balance_usdt: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.DECIMAL(18, 4),
+    defaultValue: 0,
+    get() {
+      const val = this.getDataValue('balance_usdt');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   vip_level: {
-    type: String,
-    enum: ['VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9', 'none'],
-    default: 'none'
+    type: DataTypes.ENUM('VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9', 'none'),
+    defaultValue: 'none'
   },
-  products: [
-    {
-      product_id: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Product',
-        required: true
-      },
-      purchase_date: {
-        type: Date,
-        required: true,
-        default: Date.now
-      },
-      expires_at: {
-        type: Date,
-        required: true
-      },
-      auto_renew: {
-        type: Boolean,
-        default: true
-      },
-      is_active: {
-        type: Boolean,
-        default: true
-      }
-    }
-  ],
   status: {
-    type: String,
-    enum: ['active', 'frozen', 'pending'],
-    default: 'pending'
+    type: DataTypes.ENUM('active', 'frozen', 'pending'),
+    defaultValue: 'pending'
   },
   kyc_verified: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
-  kyc_documents: {
-    id_front: String,
-    id_back: String,
-    selfie: String,
-    additional: String
+  kyc_id_front: {
+    type: DataTypes.STRING(500),
+    allowNull: true
   },
-  created_at: {
-    type: Date,
-    default: Date.now
+  kyc_id_back: {
+    type: DataTypes.STRING(500),
+    allowNull: true
   },
-  last_login: {
-    type: Date,
-    default: null
+  kyc_selfie: {
+    type: DataTypes.STRING(500),
+    allowNull: true
   },
-  updated_at: {
-    type: Date,
-    default: Date.now
+  kyc_additional: {
+    type: DataTypes.STRING(500),
+    allowNull: true
   },
   email: {
-    type: String,
+    type: DataTypes.STRING,
     unique: true,
-    sparse: true,
-    lowercase: true,
-    trim: true
+    allowNull: true,
+    set(val) {
+      this.setDataValue('email', val ? val.trim().toLowerCase() : val);
+    }
   },
   resetPasswordToken: {
-    type: String,
-    select: false
+    type: DataTypes.STRING,
+    allowNull: true
   },
   resetPasswordExpires: {
-    type: Date,
-    select: false
+    type: DataTypes.DATE,
+    allowNull: true
   },
   twoFactorEnabled: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   twoFactorCode: {
-    type: String,
-    select: false
+    type: DataTypes.STRING(10),
+    allowNull: true
   },
   twoFactorExpires: {
-    type: Date,
-    select: false
+    type: DataTypes.DATE,
+    allowNull: true
   },
   emailVerified: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   emailVerificationToken: {
-    type: String,
-    select: false
+    type: DataTypes.STRING,
+    allowNull: true
   },
   emailVerificationExpires: {
-    type: Date,
-    select: false
+    type: DataTypes.DATE,
+    allowNull: true
   },
   googleId: {
-    type: String,
-    sparse: true
+    type: DataTypes.STRING,
+    allowNull: true
   },
   facebookId: {
-    type: String,
-    sparse: true
+    type: DataTypes.STRING,
+    allowNull: true
   },
   authProvider: {
-    type: String,
-    enum: ['local', 'google', 'facebook'],
-    default: 'local'
+    type: DataTypes.ENUM('local', 'google', 'facebook'),
+    defaultValue: 'local'
   },
   profile_photo: {
-    type: String,
-    default: null
+    type: DataTypes.STRING(500),
+    allowNull: true,
+    defaultValue: null
   },
-  // Binance Integration Fields
   binance_account_id: {
-    type: String,
-    default: null,
-    trim: true
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
   },
   binance_wallet_address: {
-    type: String,
-    default: null,
-    trim: true
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
   },
   binance_wallet_verified: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   binance_wallet_verified_by: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   },
   binance_wallet_verified_at: {
-    type: Date,
-    default: null
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
   },
-  withdrawal_addresses: [
-    {
-      address: {
-        type: String,
-        required: true,
-        trim: true
-      },
-      network: {
-        type: String,
-        required: true,
-        default: 'BSC'
-      },
-      currency: {
-        type: String,
-        required: true,
-        default: 'USDT'
-      },
-      label: String,
-      verified: {
-        type: Boolean,
-        default: false
-      },
-      verified_by: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User'
-      },
-      verified_at: Date,
-      added_at: {
-        type: Date,
-        default: Date.now
-      }
-    }
-  ],
   preferred_currency: {
-    type: String,
-    default: 'USD'
+    type: DataTypes.STRING(10),
+    defaultValue: 'USD'
+  },
+  last_login: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
   }
-}, { timestamps: true });
-
-// Hash password before saving
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password_hash')) return next();
-  
-  try {
-    const salt = await bcrypt.genSalt(10);
-    this.password_hash = await bcrypt.hash(this.password_hash, salt);
-    next();
-  } catch (error) {
-    next(error);
+}, {
+  tableName: 'users',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  defaultScope: {
+    attributes: {
+      exclude: ['resetPasswordToken', 'resetPasswordExpires', 'twoFactorCode', 'twoFactorExpires', 'emailVerificationToken', 'emailVerificationExpires']
+    }
+  },
+  scopes: {
+    withSecrets: {
+      attributes: {}
+    }
   }
 });
 
-// Method to compare passwords
-userSchema.methods.comparePassword = async function(inputPassword) {
+// Hash password before create/update
+User.beforeCreate(async (user) => {
+  if (user.password_hash) {
+    const salt = await bcrypt.genSalt(10);
+    user.password_hash = await bcrypt.hash(user.password_hash, salt);
+  }
+});
+
+User.beforeUpdate(async (user) => {
+  if (user.changed('password_hash')) {
+    const salt = await bcrypt.genSalt(10);
+    user.password_hash = await bcrypt.hash(user.password_hash, salt);
+  }
+});
+
+// Instance methods
+User.prototype.comparePassword = async function (inputPassword) {
   return await bcrypt.compare(inputPassword, this.password_hash);
 };
 
-// Method to generate referral code
-userSchema.methods.generateReferralCode = function() {
+User.prototype.generateReferralCode = function () {
   return Math.random().toString(36).substring(2, 12).toUpperCase();
 };
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = User;

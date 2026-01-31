@@ -1,8 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
-const User = require('../models/User');
-const TwoFactorAuth = require('../models/TwoFactorAuth');
-const Session = require('../models/Session');
+const { User, TwoFactorAuth, Session } = require('../models');
+const { Op } = require('sequelize');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
@@ -35,7 +34,7 @@ function generate6DigitCode() {
 router.post('/2fa/enable', authenticate, async (req, res) => {
   try {
     const { method = 'app' } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -58,23 +57,23 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
     const backupCodes = generateBackupCodes();
 
     // Create or update 2FA record
-    let twoFA = await TwoFactorAuth.findOne({ user_id: user._id });
+    let twoFA = await TwoFactorAuth.findOne({ where: { user_id: user.id } });
     if (!twoFA) {
-      twoFA = new TwoFactorAuth({
-        user_id: user._id,
+      twoFA = await TwoFactorAuth.create({
+        user_id: user.id,
         secret,
         backup_codes: backupCodes,
         method,
         enabled: false
       });
     } else {
-      twoFA.secret = secret;
-      twoFA.backup_codes = backupCodes;
-      twoFA.method = method;
-      twoFA.enabled = false;
+      await twoFA.update({
+        secret,
+        backup_codes: backupCodes,
+        method,
+        enabled: false
+      });
     }
-
-    await twoFA.save();
 
     // For app-based 2FA, return the secret for QR code generation
     // For SMS/Email, send verification code
@@ -88,9 +87,10 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
     } else {
       // Generate and send verification code
       const code = generate6DigitCode();
-      user.twoFactorCode = code;
-      user.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-      await user.save();
+      await user.update({
+        twoFactorCode: code,
+        twoFactorExpires: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+      });
 
       logger.info(`2FA code sent to ${user.phone || user.email}: ${code}`);
 
@@ -109,13 +109,13 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
 router.post('/2fa/verify', authenticate, async (req, res) => {
   try {
     const { code } = req.body;
-    const user = await User.findById(req.user.id).select('+twoFactorCode +twoFactorExpires');
+    const user = await User.scope('withSecrets').findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const twoFA = await TwoFactorAuth.findOne({ user_id: user._id });
+    const twoFA = await TwoFactorAuth.findOne({ where: { user_id: user.id } });
 
     if (!twoFA) {
       return res.status(404).json({ message: '2FA not initialized' });
@@ -146,22 +146,24 @@ router.post('/2fa/verify', authenticate, async (req, res) => {
     }
 
     // Activate 2FA
-    twoFA.enabled = true;
-    twoFA.verified_at = new Date();
-    await twoFA.save();
+    await twoFA.update({
+      enabled: true,
+      verified_at: new Date()
+    });
 
-    user.twoFactorEnabled = true;
-    user.twoFactorCode = undefined;
-    user.twoFactorExpires = undefined;
-    await user.save();
+    await user.update({
+      twoFactorEnabled: true,
+      twoFactorCode: null,
+      twoFactorExpires: null
+    });
 
     // Send security notification
     await notificationService.notifySecurityAlert(
-      user._id,
+      user.id,
       'Two-Factor Authentication has been enabled on your account.'
     );
 
-    logger.info(`2FA enabled for user ${user.phone || user._id}`);
+    logger.info(`2FA enabled for user ${user.phone || user.id}`);
 
     res.json({
       message: '2FA successfully enabled',
@@ -177,7 +179,7 @@ router.post('/2fa/verify', authenticate, async (req, res) => {
 router.post('/2fa/disable', authenticate, async (req, res) => {
   try {
     const { password, code } = req.body;
-    const user = await User.findById(req.user.id).select('+password_hash');
+    const user = await User.scope('withSecrets').findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -194,7 +196,7 @@ router.post('/2fa/disable', authenticate, async (req, res) => {
     }
 
     // Verify 2FA code or backup code
-    const twoFA = await TwoFactorAuth.findOne({ user_id: user._id });
+    const twoFA = await TwoFactorAuth.findOne({ where: { user_id: user.id } });
     if (!twoFA) {
       return res.status(404).json({ message: '2FA record not found' });
     }
@@ -206,19 +208,17 @@ router.post('/2fa/disable', authenticate, async (req, res) => {
     }
 
     // Disable 2FA
-    twoFA.enabled = false;
-    await twoFA.save();
+    await twoFA.update({ enabled: false });
 
-    user.twoFactorEnabled = false;
-    await user.save();
+    await user.update({ twoFactorEnabled: false });
 
     // Send security notification
     await notificationService.notifySecurityAlert(
-      user._id,
+      user.id,
       'Two-Factor Authentication has been disabled on your account. If this wasn\'t you, please contact support immediately.'
     );
 
-    logger.warn(`2FA disabled for user ${user.phone || user._id}`);
+    logger.warn(`2FA disabled for user ${user.phone || user.id}`);
 
     res.json({
       message: '2FA successfully disabled',
@@ -233,8 +233,11 @@ router.post('/2fa/disable', authenticate, async (req, res) => {
 // Get 2FA status
 router.get('/2fa/status', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
-    const twoFA = await TwoFactorAuth.findOne({ user_id: user._id }).select('-secret -backup_codes');
+    const user = await User.findByPk(req.user.id);
+    const twoFA = await TwoFactorAuth.findOne({
+      where: { user_id: user.id },
+      attributes: { exclude: ['secret', 'backup_codes'] }
+    });
 
     res.json({
       enabled: user.twoFactorEnabled,
@@ -251,10 +254,14 @@ router.get('/2fa/status', authenticate, async (req, res) => {
 // Get active sessions
 router.get('/sessions', authenticate, async (req, res) => {
   try {
-    const sessions = await Session.find({
-      user_id: req.user.id,
-      is_active: true
-    }).select('-refresh_token').sort({ last_activity: -1 });
+    const sessions = await Session.findAll({
+      where: {
+        user_id: req.user.id,
+        is_active: true
+      },
+      attributes: { exclude: ['refresh_token'] },
+      order: [['last_activity', 'DESC']]
+    });
 
     res.json({
       sessions,
@@ -269,19 +276,18 @@ router.get('/sessions', authenticate, async (req, res) => {
 // Terminate session
 router.delete('/sessions/:sessionId', authenticate, async (req, res) => {
   try {
-    const session = await Session.findById(req.params.sessionId);
+    const session = await Session.findByPk(req.params.sessionId);
 
     if (!session) {
       return res.status(404).json({ message: 'Session not found' });
     }
 
     // Verify session belongs to user
-    if (session.user_id.toString() !== req.user.id) {
+    if (String(session.user_id) !== String(req.user.id)) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
-    session.is_active = false;
-    await session.save();
+    await session.update({ is_active: false });
 
     logger.info(`Session terminated: ${req.params.sessionId} for user ${req.user.id}`);
 
@@ -297,14 +303,14 @@ router.delete('/sessions', authenticate, async (req, res) => {
   try {
     const { current_session_id } = req.body;
 
-    const result = await Session.updateMany(
+    const [terminatedCount] = await Session.update(
+      { is_active: false },
       {
-        user_id: req.user.id,
-        is_active: true,
-        _id: { $ne: current_session_id }
-      },
-      {
-        is_active: false
+        where: {
+          user_id: req.user.id,
+          is_active: true,
+          id: { [Op.ne]: current_session_id }
+        }
       }
     );
 
@@ -312,7 +318,7 @@ router.delete('/sessions', authenticate, async (req, res) => {
 
     res.json({
       message: 'All other sessions terminated successfully',
-      terminated_count: result.modifiedCount
+      terminated_count: terminatedCount
     });
   } catch (error) {
     logger.error('Bulk session termination error:', error);
@@ -324,7 +330,7 @@ router.delete('/sessions', authenticate, async (req, res) => {
 router.post('/change-password', authenticate, async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
-    const user = await User.findById(req.user.id).select('+password_hash');
+    const user = await User.scope('withSecrets').findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -337,22 +343,22 @@ router.post('/change-password', authenticate, async (req, res) => {
     }
 
     // Update password
-    user.password_hash = new_password; // Will be hashed by pre-save hook
+    user.password_hash = new_password; // Will be hashed by beforeUpdate hook
     await user.save();
 
     // Terminate all other sessions
-    await Session.updateMany(
-      { user_id: user._id, is_active: true },
-      { is_active: false }
+    await Session.update(
+      { is_active: false },
+      { where: { user_id: user.id, is_active: true } }
     );
 
     // Send security notification
     await notificationService.notifySecurityAlert(
-      user._id,
+      user.id,
       'Your password was changed successfully. All active sessions have been terminated.'
     );
 
-    logger.info(`Password changed for user ${user.phone || user._id}`);
+    logger.info(`Password changed for user ${user.phone || user.id}`);
 
     res.json({ message: 'Password changed successfully. Please login again.' });
   } catch (error) {

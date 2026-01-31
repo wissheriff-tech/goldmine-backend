@@ -1,157 +1,81 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const messageSchema = new mongoose.Schema({
-  sender_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+const Chat = sequelize.define('Chat', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
   },
-  sender_role: {
-    type: String,
-    enum: ['user', 'admin', 'superadmin', 'finance', 'support'],
-    required: true
-  },
-  message: {
-    type: String,
-    required: true,
-    trim: true,
-    maxlength: 2000
-  },
-  message_type: {
-    type: String,
-    enum: ['text', 'image', 'file', 'system'],
-    default: 'text'
-  },
-  attachment_url: String,
-  read: {
-    type: Boolean,
-    default: false
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now
-  },
-  read_at: Date
-});
-
-const chatSchema = new mongoose.Schema({
   user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   admin_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   },
   status: {
-    type: String,
-    enum: ['open', 'assigned', 'resolved', 'closed'],
-    default: 'open'
+    type: DataTypes.ENUM('open', 'assigned', 'resolved', 'closed'),
+    defaultValue: 'open'
   },
   priority: {
-    type: String,
-    enum: ['low', 'medium', 'high', 'urgent'],
-    default: 'medium'
+    type: DataTypes.ENUM('low', 'medium', 'high', 'urgent'),
+    defaultValue: 'medium'
   },
   category: {
-    type: String,
-    enum: ['general', 'transaction', 'technical', 'account', 'vip', 'kyc'],
-    default: 'general'
+    type: DataTypes.ENUM('general', 'transaction', 'technical', 'account', 'vip', 'kyc'),
+    defaultValue: 'general'
   },
   subject: {
-    type: String,
-    trim: true,
-    maxlength: 200
+    type: DataTypes.STRING(200),
+    allowNull: true
   },
-  messages: [messageSchema],
   last_message_at: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW
   },
-  created_at: {
-    type: Date,
-    default: Date.now
+  resolved_at: {
+    type: DataTypes.DATE,
+    allowNull: true
   },
-  resolved_at: Date,
-  closed_at: Date,
+  closed_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   user_typing: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   admin_typing: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   rating: {
-    type: Number,
-    min: 1,
-    max: 5,
-    default: null
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    validate: { min: 1, max: 5 }
   },
-  feedback: String,
-  tags: [String]
-}, { timestamps: true });
-
-// Indexes for performance
-chatSchema.index({ user_id: 1 });
-chatSchema.index({ admin_id: 1 });
-chatSchema.index({ status: 1 });
-chatSchema.index({ priority: -1, last_message_at: -1 });
-chatSchema.index({ created_at: -1 });
-
-// Virtual for unread message count
-chatSchema.virtual('unread_count').get(function() {
-  return this.messages.filter(m => !m.read).length;
+  feedback: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  tags: {
+    type: DataTypes.JSON,
+    defaultValue: []
+  }
+}, {
+  tableName: 'chats',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['user_id'] },
+    { fields: ['admin_id'] },
+    { fields: ['status'] },
+    { fields: ['priority', 'last_message_at'] }
+  ]
 });
 
-// Method to add message
-chatSchema.methods.addMessage = function(senderId, senderRole, message, messageType = 'text', attachmentUrl = null) {
-  this.messages.push({
-    sender_id: senderId,
-    sender_role: senderRole,
-    message,
-    message_type: messageType,
-    attachment_url: attachmentUrl,
-    timestamp: new Date()
-  });
-  this.last_message_at = new Date();
-  return this.save();
-};
-
-// Method to mark messages as read
-chatSchema.methods.markAsRead = function(role) {
-  const targetRole = role === 'user' ? 'admin' : 'user';
-  this.messages.forEach(msg => {
-    if (msg.sender_role !== targetRole && !msg.read) {
-      msg.read = true;
-      msg.read_at = new Date();
-    }
-  });
-  return this.save();
-};
-
-// Static method to get admin dashboard stats
-chatSchema.statics.getAdminStats = async function() {
-  const stats = await this.aggregate([
-    {
-      $group: {
-        _id: '$status',
-        count: { $sum: 1 }
-      }
-    }
-  ]);
-
-  const urgentCount = await this.countDocuments({
-    status: { $in: ['open', 'assigned'] },
-    priority: 'urgent'
-  });
-
-  return {
-    stats,
-    urgentCount
-  };
-};
-
-module.exports = mongoose.model('Chat', chatSchema);
+module.exports = Chat;

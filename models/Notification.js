@@ -1,80 +1,75 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const notificationSchema = new mongoose.Schema({
+const Notification = sequelize.define('Notification', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    index: true
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   type: {
-    type: String,
-    enum: [
-      'transaction_approved',
-      'transaction_rejected',
-      'product_purchased',
-      'product_expiring',
-      'product_expired',
-      'daily_income',
-      'referral_bonus',
-      'account_approved',
-      'account_suspended',
-      'kyc_verified',
-      'kyc_rejected',
-      'withdrawal_approved',
-      'withdrawal_rejected',
-      'recharge_approved',
-      'recharge_rejected',
-      'system_announcement',
-      'security_alert',
-      'vip_upgrade'
-    ],
-    required: true
+    type: DataTypes.ENUM(
+      'transaction_approved', 'transaction_rejected',
+      'product_purchased', 'product_expiring', 'product_expired',
+      'daily_income', 'referral_bonus',
+      'account_approved', 'account_suspended',
+      'kyc_verified', 'kyc_rejected',
+      'withdrawal_approved', 'withdrawal_rejected',
+      'recharge_approved', 'recharge_rejected',
+      'system_announcement', 'security_alert', 'vip_upgrade'
+    ),
+    allowNull: false
   },
   title: {
-    type: String,
-    required: true,
-    maxlength: 200
+    type: DataTypes.STRING(200),
+    allowNull: false
   },
   message: {
-    type: String,
-    required: true,
-    maxlength: 1000
+    type: DataTypes.STRING(1000),
+    allowNull: false
   },
   data: {
-    type: mongoose.Schema.Types.Mixed,
-    default: {}
+    type: DataTypes.JSON,
+    defaultValue: {}
   },
   read: {
-    type: Boolean,
-    default: false,
-    index: true
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   priority: {
-    type: String,
-    enum: ['low', 'medium', 'high', 'urgent'],
-    default: 'medium'
+    type: DataTypes.ENUM('low', 'medium', 'high', 'urgent'),
+    defaultValue: 'medium'
   },
-  action_url: String,
-  icon: String,
-  created_at: {
-    type: Date,
-    default: Date.now,
-    index: true
+  action_url: {
+    type: DataTypes.STRING,
+    allowNull: true
   },
-  read_at: Date,
+  icon: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  read_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   expires_at: {
-    type: Date,
-    default: () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+    type: DataTypes.DATE,
+    allowNull: true
   }
-}, { timestamps: true });
+}, {
+  tableName: 'notifications',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['user_id', 'read'] },
+    { fields: ['user_id', 'created_at'] },
+    { fields: ['expires_at'] }
+  ]
+});
 
-// Indexes for fast queries
-notificationSchema.index({ user_id: 1, read: 1 });
-notificationSchema.index({ user_id: 1, created_at: -1 });
-notificationSchema.index({ expires_at: 1 });
-
-// Auto-delete expired notifications
-notificationSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
-
-module.exports = mongoose.model('Notification', notificationSchema);
+module.exports = Notification;

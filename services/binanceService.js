@@ -17,9 +17,6 @@ class BinanceService {
     }
   }
 
-  /**
-   * Create HMAC SHA256 signature for Binance API
-   */
   createSignature(queryString) {
     return crypto
       .createHmac('sha256', this.apiSecret)
@@ -27,9 +24,6 @@ class BinanceService {
       .digest('hex');
   }
 
-  /**
-   * Make authenticated request to Binance API
-   */
   async makeRequest(endpoint, params = {}, method = 'GET') {
     if (!this.isConfigured) {
       throw new Error('Binance API not configured. Please set BINANCE_API_KEY and BINANCE_SECRET_KEY');
@@ -37,7 +31,7 @@ class BinanceService {
 
     try {
       params.timestamp = Date.now();
-      params.recvWindow = 60000; // 60 seconds
+      params.recvWindow = 60000;
 
       const queryString = Object.keys(params)
         .map(key => `${key}=${encodeURIComponent(params[key])}`)
@@ -61,24 +55,15 @@ class BinanceService {
     }
   }
 
-  /**
-   * Get account information
-   */
   async getAccountInfo() {
     return await this.makeRequest('/v3/account');
   }
 
-  /**
-   * Get account balances
-   */
   async getBalances() {
     const accountInfo = await this.getAccountInfo();
     return accountInfo.balances.filter(b => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
   }
 
-  /**
-   * Get balance for specific asset
-   */
   async getAssetBalance(asset = 'USDT') {
     const balances = await this.getBalances();
     const balance = balances.find(b => b.asset === asset);
@@ -91,9 +76,6 @@ class BinanceService {
     };
   }
 
-  /**
-   * Generate deposit address for a coin/network
-   */
   async getDepositAddress(coin = 'USDT', network = 'BSC') {
     try {
       const data = await this.makeRequest('/v1/capital/deposit/address', {
@@ -113,31 +95,16 @@ class BinanceService {
     }
   }
 
-  /**
-   * Get deposit history
-   */
   async getDepositHistory(coin = null, limit = 100) {
     const params = { limit };
     if (coin) params.coin = coin;
-
     return await this.makeRequest('/v1/capital/deposit/hisrec', params);
   }
 
-  /**
-   * Withdraw funds to external address
-   */
   async withdraw(coin, network, address, amount, addressTag = null) {
     try {
-      const params = {
-        coin,
-        network,
-        address,
-        amount
-      };
-
-      if (addressTag) {
-        params.addressTag = addressTag;
-      }
+      const params = { coin, network, address, amount };
+      if (addressTag) params.addressTag = addressTag;
 
       const result = await this.makeRequest('/v1/capital/withdraw/apply', params, 'POST');
 
@@ -156,22 +123,14 @@ class BinanceService {
     }
   }
 
-  /**
-   * Get withdrawal history
-   */
   async getWithdrawalHistory(coin = null, limit = 100) {
     const params = { limit };
     if (coin) params.coin = coin;
-
     return await this.makeRequest('/v1/capital/withdraw/history', params);
   }
 
-  /**
-   * Get current price for a trading pair
-   */
   async getPrice(symbol = 'USDTNGN') {
     try {
-      // No signature needed for public endpoint
       const response = await axios.get(`${this.baseURL}/v3/ticker/price`, {
         params: { symbol }
       });
@@ -186,9 +145,6 @@ class BinanceService {
     }
   }
 
-  /**
-   * Get all trading pair prices
-   */
   async getAllPrices() {
     try {
       const response = await axios.get(`${this.baseURL}/v3/ticker/price`);
@@ -202,13 +158,8 @@ class BinanceService {
     }
   }
 
-  /**
-   * Get exchange rate for a currency vs USD
-   * Tries multiple symbol combinations
-   */
   async getExchangeRate(currencyCode) {
     try {
-      // Try direct pair first (e.g., USDTNGN, BUSDNGN)
       const symbols = [
         `USDT${currencyCode}`,
         `BUSD${currencyCode}`,
@@ -219,8 +170,6 @@ class BinanceService {
       for (const symbol of symbols) {
         const priceData = await this.getPrice(symbol);
         if (priceData) {
-          // If symbol is USD_XXX format, rate is direct
-          // If symbol is XXX_USD format, rate is inverse
           const rate = symbol.startsWith('USDT') || symbol.startsWith('BUSD')
             ? priceData.price
             : 1 / priceData.price;
@@ -243,19 +192,15 @@ class BinanceService {
     }
   }
 
-  /**
-   * Update all exchange rates in database from Binance
-   */
   async updateExchangeRates() {
     try {
       logger.info('Updating exchange rates from Binance...');
 
-      const currencies = await ExchangeRate.find({ enabled: true });
+      const currencies = await ExchangeRate.findAll({ where: { enabled: true } });
       let updated = 0;
       let failed = 0;
 
       for (const currency of currencies) {
-        // Skip USD (base currency)
         if (currency.currency_code === 'USD') continue;
 
         try {
@@ -265,7 +210,6 @@ class BinanceService {
             currency.binance_rate = rateData.rate_to_usd;
             currency.last_binance_update = new Date();
 
-            // If not using admin override, update the active rate
             if (currency.active_rate_source === 'binance') {
               currency.rate_to_usd = rateData.rate_to_usd;
               currency.usd_per_unit = rateData.usd_per_unit;
@@ -283,7 +227,6 @@ class BinanceService {
           logger.error(`Error updating ${currency.currency_code}:`, error.message);
         }
 
-        // Rate limit: Wait 100ms between requests
         await new Promise(resolve => setTimeout(resolve, 100));
       }
 
@@ -301,9 +244,6 @@ class BinanceService {
     }
   }
 
-  /**
-   * Get supported coins and networks
-   */
   async getSupportedCoins() {
     try {
       return await this.makeRequest('/v1/capital/config/getall');
@@ -313,13 +253,8 @@ class BinanceService {
     }
   }
 
-  /**
-   * Verify if an address is valid for withdrawal
-   */
   async verifyAddress(coin, network, address) {
     try {
-      // Binance doesn't have a direct verification endpoint
-      // We'll check if the coin and network are supported
       const coins = await this.getSupportedCoins();
       const coinData = coins.find(c => c.coin === coin);
 
@@ -352,7 +287,6 @@ class BinanceService {
   }
 }
 
-// Create singleton instance
 const binanceService = new BinanceService();
 
 module.exports = binanceService;

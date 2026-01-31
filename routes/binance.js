@@ -1,8 +1,7 @@
 const express = require('express');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-const User = require('../models/User');
-const ExchangeRate = require('../models/ExchangeRate');
-const Transaction = require('../models/Transaction');
+const { User, ExchangeRate, WithdrawalAddress } = require('../models');
+const { Op } = require('sequelize');
 const binanceService = require('../services/binanceService');
 const logger = require('../utils/logger');
 const { getIO } = require('../config/socket');
@@ -27,32 +26,34 @@ router.post('/wallet/submit', authenticate, async (req, res) => {
       });
     }
 
-    const user = await User.findById(req.user.userId);
+    const user = await User.findByPk(req.user.userId);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
     // Update user with submitted information
+    const updateData = {};
+
     if (binance_account_id) {
-      user.binance_account_id = binance_account_id;
+      updateData.binance_account_id = binance_account_id;
     }
 
     if (wallet_address) {
-      user.binance_wallet_address = wallet_address;
+      updateData.binance_wallet_address = wallet_address;
       // Reset verification when address changes
-      user.binance_wallet_verified = false;
-      user.binance_wallet_verified_by = null;
-      user.binance_wallet_verified_at = null;
+      updateData.binance_wallet_verified = false;
+      updateData.binance_wallet_verified_by = null;
+      updateData.binance_wallet_verified_at = null;
     }
 
-    await user.save();
+    await user.update(updateData);
 
     // Notify admins via socket
     try {
       const io = getIO();
       io.to('admin-room').emit('new-wallet-submission', {
-        userId: user._id,
+        userId: user.id,
         username: user.username,
         binance_account_id: user.binance_account_id,
         wallet_address: user.binance_wallet_address
@@ -101,10 +102,17 @@ router.post('/wallet/withdrawal-address', authenticate, async (req, res) => {
       }
     }
 
-    const user = await User.findById(req.user.userId);
+    const user = await User.findByPk(req.user.userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
 
     // Check if address already exists
-    const existingAddress = user.withdrawal_addresses.find(a => a.address === address);
+    const existingAddress = await WithdrawalAddress.findOne({
+      where: { user_id: user.id, address }
+    });
+
     if (existingAddress) {
       return res.status(400).json({
         message: 'This withdrawal address has already been added'
@@ -112,7 +120,8 @@ router.post('/wallet/withdrawal-address', authenticate, async (req, res) => {
     }
 
     // Add new address
-    user.withdrawal_addresses.push({
+    const newAddress = await WithdrawalAddress.create({
+      user_id: user.id,
       address,
       network,
       currency,
@@ -120,13 +129,11 @@ router.post('/wallet/withdrawal-address', authenticate, async (req, res) => {
       verified: false
     });
 
-    await user.save();
-
     // Notify admins
     try {
       const io = getIO();
       io.to('admin-room').emit('new-withdrawal-address', {
-        userId: user._id,
+        userId: user.id,
         username: user.username,
         address,
         currency,
@@ -140,7 +147,7 @@ router.post('/wallet/withdrawal-address', authenticate, async (req, res) => {
 
     res.json({
       message: 'Withdrawal address added successfully. Awaiting Super Admin verification.',
-      address: user.withdrawal_addresses[user.withdrawal_addresses.length - 1]
+      address: newAddress
     });
   } catch (error) {
     logger.error('Add withdrawal address error:', error);
@@ -154,18 +161,27 @@ router.post('/wallet/withdrawal-address', authenticate, async (req, res) => {
  */
 router.get('/wallet/my-wallet', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user.userId)
-      .populate('binance_wallet_verified_by', 'username role')
-      .populate('withdrawal_addresses.verified_by', 'username role');
+    const user = await User.findByPk(req.user.userId, {
+      include: [
+        { model: User, as: 'walletVerifiedBy', attributes: ['username', 'role'] }
+      ]
+    });
+
+    const withdrawalAddresses = await WithdrawalAddress.findAll({
+      where: { user_id: user.id },
+      include: [
+        { model: User, as: 'verifiedBy', attributes: ['username', 'role'] }
+      ]
+    });
 
     res.json({
       wallet: {
         binance_account_id: user.binance_account_id,
         binance_wallet_address: user.binance_wallet_address,
         verified: user.binance_wallet_verified,
-        verified_by: user.binance_wallet_verified_by,
+        verified_by: user.walletVerifiedBy,
         verified_at: user.binance_wallet_verified_at,
-        withdrawal_addresses: user.withdrawal_addresses,
+        withdrawal_addresses: withdrawalAddresses,
         preferred_currency: user.preferred_currency
       }
     });
@@ -185,28 +201,36 @@ router.get('/wallet/my-wallet', authenticate, async (req, res) => {
  */
 router.get('/wallet/pending', authenticate, authorizeRoles('finance', 'superadmin'), async (req, res) => {
   try {
-    const pendingWallets = await User.find({
-      $or: [
-        { binance_wallet_address: { $ne: null }, binance_wallet_verified: false },
-        { binance_account_id: { $ne: null }, binance_wallet_verified: false }
-      ]
-    }).select('username phone email binance_account_id binance_wallet_address binance_wallet_verified created_at');
+    const pendingWallets = await User.findAll({
+      where: {
+        [Op.or]: [
+          { binance_wallet_address: { [Op.ne]: null }, binance_wallet_verified: false },
+          { binance_account_id: { [Op.ne]: null }, binance_wallet_verified: false }
+        ]
+      },
+      attributes: ['id', 'username', 'phone', 'email', 'binance_account_id', 'binance_wallet_address', 'binance_wallet_verified', 'created_at']
+    });
 
-    const pendingAddresses = await User.find({
-      'withdrawal_addresses.verified': false
-    }).select('username phone withdrawal_addresses');
+    const pendingAddresses = await WithdrawalAddress.findAll({
+      where: { verified: false },
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'username', 'phone'] }
+      ]
+    });
 
     res.json({
       pendingWallets,
-      pendingAddresses: pendingAddresses.flatMap(user =>
-        user.withdrawal_addresses
-          .filter(addr => !addr.verified)
-          .map(addr => ({
-            userId: user._id,
-            username: user.username,
-            ...addr.toObject()
-          }))
-      )
+      pendingAddresses: pendingAddresses.map(addr => ({
+        userId: addr.user.id,
+        username: addr.user.username,
+        id: addr.id,
+        address: addr.address,
+        network: addr.network,
+        currency: addr.currency,
+        label: addr.label,
+        verified: addr.verified,
+        created_at: addr.created_at
+      }))
     });
   } catch (error) {
     logger.error('Get pending wallets error:', error);
@@ -223,7 +247,7 @@ router.post('/wallet/verify/:userId', authenticate, authorizeRoles('superadmin')
     const { userId } = req.params;
     const { approved, reason } = req.body;
 
-    const user = await User.findById(userId);
+    const user = await User.findByPk(userId);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -234,17 +258,19 @@ router.post('/wallet/verify/:userId', authenticate, authorizeRoles('superadmin')
     }
 
     if (approved) {
-      user.binance_wallet_verified = true;
-      user.binance_wallet_verified_by = req.user.userId;
-      user.binance_wallet_verified_at = new Date();
+      await user.update({
+        binance_wallet_verified: true,
+        binance_wallet_verified_by: req.user.userId,
+        binance_wallet_verified_at: new Date()
+      });
     } else {
       // Rejected - clear wallet info
-      user.binance_wallet_address = null;
-      user.binance_account_id = null;
-      user.binance_wallet_verified = false;
+      await user.update({
+        binance_wallet_address: null,
+        binance_account_id: null,
+        binance_wallet_verified: false
+      });
     }
-
-    await user.save();
 
     // Notify user via socket
     try {
@@ -283,28 +309,30 @@ router.post('/wallet/verify-address/:userId/:addressId', authenticate, authorize
     const { userId, addressId } = req.params;
     const { approved, reason } = req.body;
 
-    const user = await User.findById(userId);
+    const user = await User.findByPk(userId);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const address = user.withdrawal_addresses.id(addressId);
+    const address = await WithdrawalAddress.findOne({
+      where: { id: addressId, user_id: userId }
+    });
 
     if (!address) {
       return res.status(404).json({ message: 'Withdrawal address not found' });
     }
 
     if (approved) {
-      address.verified = true;
-      address.verified_by = req.user.userId;
-      address.verified_at = new Date();
+      await address.update({
+        verified: true,
+        verified_by: req.user.userId,
+        verified_at: new Date()
+      });
     } else {
       // Remove rejected address
-      user.withdrawal_addresses.pull(addressId);
+      await address.destroy();
     }
-
-    await user.save();
 
     // Notify user
     try {
@@ -341,9 +369,13 @@ router.post('/wallet/verify-address/:userId/:addressId', authenticate, authorize
  */
 router.get('/exchange-rates', authenticate, async (req, res) => {
   try {
-    const rates = await ExchangeRate.find({ enabled: true })
-      .populate('override_set_by', 'username role')
-      .sort({ currency_code: 1 });
+    const rates = await ExchangeRate.findAll({
+      where: { enabled: true },
+      include: [
+        { model: User, as: 'overrideSetBy', attributes: ['username', 'role'] }
+      ],
+      order: [['currency_code', 'ASC']]
+    });
 
     const formattedRates = rates.map(rate => {
       const activeRate = rate.getActiveRate();
@@ -377,9 +409,14 @@ router.get('/exchange-rates/:currency', authenticate, async (req, res) => {
     const { currency } = req.params;
 
     const rate = await ExchangeRate.findOne({
-      currency_code: currency.toUpperCase(),
-      enabled: true
-    }).populate('override_set_by', 'username role');
+      where: {
+        currency_code: currency.toUpperCase(),
+        enabled: true
+      },
+      include: [
+        { model: User, as: 'overrideSetBy', attributes: ['username', 'role'] }
+      ]
+    });
 
     if (!rate) {
       return res.status(404).json({ message: 'Currency not found' });
@@ -396,7 +433,7 @@ router.get('/exchange-rates/:currency', authenticate, async (req, res) => {
       source: activeRate.source,
       binance_rate: rate.binance_rate,
       admin_override_rate: rate.admin_override_rate,
-      override_set_by: rate.override_set_by,
+      override_set_by: rate.overrideSetBy,
       override_reason: rate.override_reason,
       last_update: rate.last_binance_update
     });
@@ -475,7 +512,7 @@ router.post('/exchange-rates/:currency/override', authenticate, authorizeRoles('
     }
 
     const exchangeRate = await ExchangeRate.findOne({
-      currency_code: currency.toUpperCase()
+      where: { currency_code: currency.toUpperCase() }
     });
 
     if (!exchangeRate) {
@@ -483,25 +520,26 @@ router.post('/exchange-rates/:currency/override', authenticate, authorizeRoles('
     }
 
     if (use_override) {
-      exchangeRate.admin_override_rate = parseFloat(rate);
-      exchangeRate.active_rate_source = 'admin';
-      exchangeRate.override_set_by = req.user.userId;
-      exchangeRate.override_reason = reason || 'Manual rate adjustment';
-      exchangeRate.override_set_at = new Date();
-
-      // Update active rates
-      exchangeRate.rate_to_usd = parseFloat(rate);
-      exchangeRate.usd_per_unit = 1 / parseFloat(rate);
+      await exchangeRate.update({
+        admin_override_rate: parseFloat(rate),
+        active_rate_source: 'admin',
+        override_set_by: req.user.userId,
+        override_reason: reason || 'Manual rate adjustment',
+        override_set_at: new Date(),
+        rate_to_usd: parseFloat(rate),
+        usd_per_unit: 1 / parseFloat(rate)
+      });
     } else {
       // Remove override, use Binance rate
-      exchangeRate.active_rate_source = 'binance';
+      const updateData = {
+        active_rate_source: 'binance'
+      };
       if (exchangeRate.binance_rate) {
-        exchangeRate.rate_to_usd = exchangeRate.binance_rate;
-        exchangeRate.usd_per_unit = 1 / exchangeRate.binance_rate;
+        updateData.rate_to_usd = exchangeRate.binance_rate;
+        updateData.usd_per_unit = 1 / exchangeRate.binance_rate;
       }
+      await exchangeRate.update(updateData);
     }
-
-    await exchangeRate.save();
 
     logger.info(`Admin ${req.user.userId} ${use_override ? 'set' : 'removed'} override for ${currency}: ${rate}`);
 
@@ -537,7 +575,7 @@ router.post('/exchange-rates/add', authenticate, authorizeRoles('superadmin'), a
 
     // Check if currency already exists
     const existing = await ExchangeRate.findOne({
-      currency_code: currency_code.toUpperCase()
+      where: { currency_code: currency_code.toUpperCase() }
     });
 
     if (existing) {
@@ -556,7 +594,7 @@ router.post('/exchange-rates/add', authenticate, authorizeRoles('superadmin'), a
       }
     }
 
-    const newRate = new ExchangeRate({
+    const newRate = await ExchangeRate.create({
       currency_code: currency_code.toUpperCase(),
       currency_name,
       currency_symbol: currency_symbol || '$',
@@ -566,8 +604,6 @@ router.post('/exchange-rates/add', authenticate, authorizeRoles('superadmin'), a
       binance_rate,
       last_binance_update: binance_rate ? new Date() : null
     });
-
-    await newRate.save();
 
     logger.info(`New currency added: ${currency_code} by admin ${req.user.userId}`);
 

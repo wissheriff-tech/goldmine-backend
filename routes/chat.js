@@ -1,5 +1,6 @@
 const express = require('express');
-const Chat = require('../models/Chat');
+const { Chat, ChatMessage, User } = require('../models');
+const { Op, fn, col, literal } = require('sequelize');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { getIO } = require('../config/socket');
 const logger = require('../utils/logger');
@@ -13,19 +14,21 @@ router.post('/', authenticate, async (req, res) => {
 
     // Check if user has an open chat already
     const existingChat = await Chat.findOne({
-      user_id: req.user.userId,
-      status: { $in: ['open', 'assigned'] }
+      where: {
+        user_id: req.user.userId,
+        status: { [Op.in]: ['open', 'assigned'] }
+      }
     });
 
     if (existingChat) {
       return res.status(400).json({
         message: 'You already have an active chat. Please close it before starting a new one.',
-        chatId: existingChat._id
+        chatId: existingChat.id
       });
     }
 
     // Create new chat
-    const chat = new Chat({
+    const chat = await Chat.create({
       user_id: req.user.userId,
       subject: subject || 'General Inquiry',
       category: category || 'general',
@@ -35,12 +38,20 @@ router.post('/', authenticate, async (req, res) => {
 
     // Add initial message if provided
     if (message) {
-      await chat.addMessage(req.user.userId, req.user.role, message);
+      await ChatMessage.create({
+        chat_id: chat.id,
+        sender_id: req.user.userId,
+        sender_role: req.user.role,
+        message
+      });
+
+      // Update last_message_at on the chat
+      await chat.update({ last_message_at: new Date() });
     }
 
-    await chat.save();
-
-    const populatedChat = await Chat.findById(chat._id).populate('user_id');
+    const populatedChat = await Chat.findByPk(chat.id, {
+      include: [{ model: User, as: 'user' }]
+    });
 
     // Notify admins via socket
     try {
@@ -70,19 +81,23 @@ router.get('/my-chats', authenticate, async (req, res) => {
   try {
     const { status, limit = 20, offset = 0 } = req.query;
 
-    const query = { user_id: req.user.userId };
+    const where = { user_id: req.user.userId };
 
     if (status) {
-      query.status = status;
+      where.status = status;
     }
 
-    const chats = await Chat.find(query)
-      .populate('admin_id', 'username role')
-      .sort({ last_message_at: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(offset));
-
-    const total = await Chat.countDocuments(query);
+    const { rows: chats, count: total } = await Chat.findAndCountAll({
+      where,
+      include: [{
+        model: User,
+        as: 'admin',
+        attributes: ['username', 'role']
+      }],
+      order: [['last_message_at', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
 
     res.json({
       chats,
@@ -108,21 +123,31 @@ router.get('/all', authenticate, authorizeRoles('admin', 'superadmin'), async (r
       offset = 0
     } = req.query;
 
-    const query = {};
+    const where = {};
 
-    if (status) query.status = status;
-    if (priority) query.priority = priority;
-    if (category) query.category = category;
-    if (admin_id) query.admin_id = admin_id;
+    if (status) where.status = status;
+    if (priority) where.priority = priority;
+    if (category) where.category = category;
+    if (admin_id) where.admin_id = admin_id;
 
-    const chats = await Chat.find(query)
-      .populate('user_id', 'username phone email vip_level')
-      .populate('admin_id', 'username role')
-      .sort({ priority: -1, last_message_at: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(offset));
-
-    const total = await Chat.countDocuments(query);
+    const { rows: chats, count: total } = await Chat.findAndCountAll({
+      where,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['username', 'phone', 'email', 'vip_level']
+        },
+        {
+          model: User,
+          as: 'admin',
+          attributes: ['username', 'role']
+        }
+      ],
+      order: [['priority', 'DESC'], ['last_message_at', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
 
     res.json({
       chats,
@@ -141,10 +166,20 @@ router.get('/:chatId', authenticate, async (req, res) => {
   try {
     const { chatId } = req.params;
 
-    const chat = await Chat.findById(chatId)
-      .populate('user_id', 'username phone email vip_level')
-      .populate('admin_id', 'username role')
-      .populate('messages.sender_id', 'username role');
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'username', 'phone', 'email', 'vip_level']
+        },
+        {
+          model: User,
+          as: 'admin',
+          attributes: ['id', 'username', 'role']
+        }
+      ]
+    });
 
     if (!chat) {
       return res.status(404).json({ message: 'Chat not found' });
@@ -152,18 +187,41 @@ router.get('/:chatId', authenticate, async (req, res) => {
 
     // Verify user has access
     const isAuthorized =
-      chat.user_id._id.toString() === req.user.userId ||
-      (chat.admin_id && chat.admin_id._id.toString() === req.user.userId) ||
+      chat.user_id.toString() === req.user.userId.toString() ||
+      (chat.admin_id && chat.admin_id.toString() === req.user.userId.toString()) ||
       ['admin', 'superadmin'].includes(req.user.role);
 
     if (!isAuthorized) {
       return res.status(403).json({ message: 'Unauthorized access to chat' });
     }
 
-    // Mark messages as read
-    await chat.markAsRead(req.user.role);
+    // Get messages for this chat
+    const messages = await ChatMessage.findAll({
+      where: { chat_id: chatId },
+      include: [{
+        model: User,
+        as: 'sender',
+        attributes: ['username', 'role']
+      }],
+      order: [['created_at', 'ASC']]
+    });
 
-    res.json({ chat });
+    // Mark messages as read
+    await ChatMessage.update(
+      { read: true, read_at: new Date() },
+      {
+        where: {
+          chat_id: chatId,
+          read: false,
+          sender_role: { [Op.ne]: req.user.role }
+        }
+      }
+    );
+
+    const chatData = chat.toJSON();
+    chatData.messages = messages;
+
+    res.json({ chat: chatData });
   } catch (error) {
     logger.error('Get chat error:', error);
     res.status(500).json({ message: 'Failed to get chat', error: error.message });
@@ -186,15 +244,20 @@ router.patch('/:chatId', authenticate, authorizeRoles('admin', 'superadmin'), as
       updateData.resolved_at = new Date();
     }
 
-    const chat = await Chat.findByIdAndUpdate(
-      chatId,
-      updateData,
-      { new: true, runValidators: true }
-    ).populate('user_id admin_id');
+    const [affectedCount] = await Chat.update(updateData, {
+      where: { id: chatId }
+    });
 
-    if (!chat) {
+    if (affectedCount === 0) {
       return res.status(404).json({ message: 'Chat not found' });
     }
+
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        { model: User, as: 'user' },
+        { model: User, as: 'admin' }
+      ]
+    });
 
     // Notify via socket
     try {
@@ -223,18 +286,24 @@ router.post('/:chatId/assign', authenticate, authorizeRoles('admin', 'superadmin
     const { chatId } = req.params;
     const { admin_id } = req.body;
 
-    const chat = await Chat.findByIdAndUpdate(
-      chatId,
+    const [affectedCount] = await Chat.update(
       {
         admin_id: admin_id || req.user.userId,
         status: 'assigned'
       },
-      { new: true }
-    ).populate('user_id admin_id');
+      { where: { id: chatId } }
+    );
 
-    if (!chat) {
+    if (affectedCount === 0) {
       return res.status(404).json({ message: 'Chat not found' });
     }
+
+    const chat = await Chat.findByPk(chatId, {
+      include: [
+        { model: User, as: 'user' },
+        { model: User, as: 'admin' }
+      ]
+    });
 
     // Notify via socket
     try {
@@ -267,7 +336,7 @@ router.post('/:chatId/messages', authenticate, async (req, res) => {
       return res.status(400).json({ message: 'Message cannot be empty' });
     }
 
-    const chat = await Chat.findById(chatId);
+    const chat = await Chat.findByPk(chatId);
 
     if (!chat) {
       return res.status(404).json({ message: 'Chat not found' });
@@ -275,34 +344,42 @@ router.post('/:chatId/messages', authenticate, async (req, res) => {
 
     // Verify user has access
     const isAuthorized =
-      chat.user_id.toString() === req.user.userId ||
-      (chat.admin_id && chat.admin_id.toString() === req.user.userId) ||
+      chat.user_id.toString() === req.user.userId.toString() ||
+      (chat.admin_id && chat.admin_id.toString() === req.user.userId.toString()) ||
       ['admin', 'superadmin'].includes(req.user.role);
 
     if (!isAuthorized) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
-    await chat.addMessage(
-      req.user.userId,
-      req.user.role,
+    // Create the message in the ChatMessage table
+    const newMessage = await ChatMessage.create({
+      chat_id: chatId,
+      sender_id: req.user.userId,
+      sender_role: req.user.role,
       message,
-      messageType || 'text',
-      attachmentUrl
-    );
+      message_type: messageType || 'text',
+      attachment_url: attachmentUrl || null
+    });
 
-    const populatedChat = await Chat.findById(chatId)
-      .populate('user_id admin_id')
-      .populate('messages.sender_id', 'username role');
+    // Update last_message_at on the chat
+    await chat.update({ last_message_at: new Date() });
 
-    const newMessage = populatedChat.messages[populatedChat.messages.length - 1];
+    // Fetch the message with sender info
+    const populatedMessage = await ChatMessage.findByPk(newMessage.id, {
+      include: [{
+        model: User,
+        as: 'sender',
+        attributes: ['username', 'role']
+      }]
+    });
 
     // Notify via socket
     try {
       const io = getIO();
       io.to(`chat-${chatId}`).emit('new-message', {
         chatId,
-        message: newMessage
+        message: populatedMessage
       });
 
       if (req.user.role === 'user') {
@@ -320,7 +397,7 @@ router.post('/:chatId/messages', authenticate, async (req, res) => {
 
     res.status(201).json({
       message: 'Message sent successfully',
-      newMessage
+      newMessage: populatedMessage
     });
   } catch (error) {
     logger.error('Add message error:', error);
@@ -334,7 +411,7 @@ router.post('/:chatId/close', authenticate, async (req, res) => {
     const { chatId } = req.params;
     const { rating, feedback } = req.body;
 
-    const chat = await Chat.findById(chatId);
+    const chat = await Chat.findByPk(chatId);
 
     if (!chat) {
       return res.status(404).json({ message: 'Chat not found' });
@@ -342,7 +419,7 @@ router.post('/:chatId/close', authenticate, async (req, res) => {
 
     // Verify user has access
     const isAuthorized =
-      chat.user_id.toString() === req.user.userId ||
+      chat.user_id.toString() === req.user.userId.toString() ||
       ['admin', 'superadmin'].includes(req.user.role);
 
     if (!isAuthorized) {
@@ -362,11 +439,14 @@ router.post('/:chatId/close', authenticate, async (req, res) => {
       updateData.feedback = feedback;
     }
 
-    const updatedChat = await Chat.findByIdAndUpdate(
-      chatId,
-      updateData,
-      { new: true }
-    ).populate('user_id admin_id');
+    await Chat.update(updateData, { where: { id: chatId } });
+
+    const updatedChat = await Chat.findByPk(chatId, {
+      include: [
+        { model: User, as: 'user' },
+        { model: User, as: 'admin' }
+      ]
+    });
 
     // Notify via socket
     try {
@@ -392,49 +472,59 @@ router.post('/:chatId/close', authenticate, async (req, res) => {
 // Get chat statistics (admin only)
 router.get('/stats/overview', authenticate, authorizeRoles('admin', 'superadmin'), async (req, res) => {
   try {
-    const stats = await Chat.getAdminStats();
+    // Chat counts by status
+    const statsCounts = await Chat.findAll({
+      attributes: [
+        'status',
+        [fn('COUNT', col('id')), 'count']
+      ],
+      group: ['status'],
+      raw: true
+    });
 
-    const avgResponseTime = await Chat.aggregate([
-      {
-        $match: {
-          status: 'closed',
-          resolved_at: { $exists: true }
-        }
-      },
-      {
-        $project: {
-          responseTime: {
-            $subtract: ['$resolved_at', '$created_at']
-          }
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          avgTime: { $avg: '$responseTime' }
-        }
-      }
-    ]);
+    const stats = {};
+    statsCounts.forEach(s => {
+      stats[s.status] = parseInt(s.count);
+    });
 
-    const avgRating = await Chat.aggregate([
-      {
-        $match: { rating: { $exists: true, $ne: null } }
-      },
-      {
-        $group: {
-          _id: null,
-          avgRating: { $avg: '$rating' },
-          totalRatings: { $sum: 1 }
-        }
+    // Urgent count (open + high/urgent priority)
+    const urgentCount = await Chat.count({
+      where: {
+        status: { [Op.in]: ['open', 'assigned'] },
+        priority: { [Op.in]: ['high', 'urgent'] }
       }
-    ]);
+    });
+
+    // Average response time for closed chats
+    const avgResponseTime = await Chat.findAll({
+      where: {
+        status: 'closed',
+        resolved_at: { [Op.ne]: null }
+      },
+      attributes: [
+        [fn('AVG', literal('TIMESTAMPDIFF(SECOND, created_at, resolved_at) * 1000')), 'avgTime']
+      ],
+      raw: true
+    });
+
+    // Average rating
+    const avgRating = await Chat.findAll({
+      where: {
+        rating: { [Op.ne]: null }
+      },
+      attributes: [
+        [fn('AVG', col('rating')), 'avgRating'],
+        [fn('COUNT', col('id')), 'totalRatings']
+      ],
+      raw: true
+    });
 
     res.json({
-      stats: stats.stats,
-      urgentCount: stats.urgentCount,
-      avgResponseTimeMs: avgResponseTime[0]?.avgTime || 0,
-      avgRating: avgRating[0]?.avgRating || 0,
-      totalRatings: avgRating[0]?.totalRatings || 0
+      stats,
+      urgentCount,
+      avgResponseTimeMs: parseFloat(avgResponseTime[0]?.avgTime) || 0,
+      avgRating: parseFloat(avgRating[0]?.avgRating) || 0,
+      totalRatings: parseInt(avgRating[0]?.totalRatings) || 0
     });
   } catch (error) {
     logger.error('Get chat stats error:', error);

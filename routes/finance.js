@@ -1,6 +1,6 @@
 const express = require('express');
-const Transaction = require('../models/Transaction');
-const User = require('../models/User');
+const { User, Transaction, Product } = require('../models');
+const { Op } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
@@ -26,14 +26,18 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
     if (type) filter.type = type;
     if (status) filter.status = status;
 
-    const transactions = await Transaction.find(filter)
-      .populate('user_id', 'phone balance_NSL balance_usdt')
-      .populate('approved_by', 'phone')
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip));
+    const transactions = await Transaction.findAll({
+      where: filter,
+      include: [
+        { model: User, as: 'user', attributes: ['phone', 'balance_NSL', 'balance_usdt'] },
+        { model: User, as: 'approver', attributes: ['phone'] }
+      ],
+      order: [['timestamp', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(skip)
+    });
 
-    const total = await Transaction.countDocuments(filter);
+    const total = await Transaction.count({ where: filter });
 
     res.json({
       transactions,
@@ -53,13 +57,13 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
 router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateApproveReject, async (req, res) => {
   try {
     const { reason } = req.body;
-    const transaction = await Transaction.findById(req.params.id);
+    const transaction = await Transaction.findByPk(req.params.id);
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found' });
     }
 
-    const user = await User.findById(transaction.user_id);
+    const user = await User.findByPk(transaction.user_id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -106,7 +110,7 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
     await transaction.save();
     await user.save();
 
-    logger.info(`Transaction approved: ${transaction._id} by ${req.user.phone}`);
+    logger.info(`Transaction approved: ${transaction.id} by ${req.user.phone}`);
 
     // Send email notification
     if (user.email) {
@@ -128,7 +132,7 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
     // Send in-app notification
     try {
       await notificationService.notifyTransactionApproved(
-        user._id,
+        user.id,
         transaction.type,
         transaction.amount_NSL
       );
@@ -155,13 +159,15 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
 router.patch('/transactions/:id/reject', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateApproveReject, async (req, res) => {
   try {
     const { reason } = req.body;
-    const transaction = await Transaction.findById(req.params.id).populate('user_id');
+    const transaction = await Transaction.findByPk(req.params.id, {
+      include: [{ model: User, as: 'user' }]
+    });
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found' });
     }
 
-    const user = transaction.user_id;
+    const user = transaction.user;
 
     transaction.status = 'rejected';
     transaction.approved_by = req.user.id;
@@ -169,7 +175,7 @@ router.patch('/transactions/:id/reject', authenticate, authorize(['superadmin', 
     transaction.completed_at = new Date();
 
     await transaction.save();
-    logger.info(`Transaction rejected: ${transaction._id} by ${req.user.phone}`);
+    logger.info(`Transaction rejected: ${transaction.id} by ${req.user.phone}`);
 
     // Send email notification
     if (user && user.email) {
@@ -192,7 +198,7 @@ router.patch('/transactions/:id/reject', authenticate, authorize(['superadmin', 
     if (user) {
       try {
         await notificationService.notifyTransactionRejected(
-          user._id,
+          user.id,
           transaction.type,
           transaction.amount_NSL,
           transaction.notes
@@ -223,13 +229,15 @@ router.get('/users', authenticate, authorize(['superadmin', 'finance']), async (
 
     if (status) filter.status = status;
 
-    const users = await User.find(filter)
-      .select('-password_hash')
-      .limit(parseInt(limit))
-      .skip(parseInt(skip))
-      .sort({ created_at: -1 });
+    const users = await User.findAll({
+      where: filter,
+      attributes: { exclude: ['password_hash'] },
+      limit: parseInt(limit),
+      offset: parseInt(skip),
+      order: [['created_at', 'DESC']]
+    });
 
-    const total = await User.countDocuments(filter);
+    const total = await User.count({ where: filter });
 
     res.json({
       users,
@@ -249,7 +257,7 @@ router.get('/users', authenticate, authorize(['superadmin', 'finance']), async (
 router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateAddCurrency, async (req, res) => {
   try {
     const { amount_NSL, amount_usdt, reason } = req.body;
-    const user = await User.findById(req.params.id);
+    const user = await User.findByPk(req.params.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -265,8 +273,8 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
     await user.save();
 
     // Create transaction record
-    const transaction = new Transaction({
-      user_id: user._id,
+    const transaction = await Transaction.create({
+      user_id: user.id,
       type: 'recharge',
       amount_NSL: amount_NSL || 0,
       amount_usdt: amount_usdt || 0,
@@ -275,14 +283,13 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
       notes: `Currency added by finance: ${reason || 'Manual addition'}`,
       completed_at: new Date()
     });
-    await transaction.save();
 
     logger.info(`Currency added by finance (${req.user.phone}) to user ${user.phone}: NSL=${amount_NSL}, USDT=${amount_usdt}`);
 
     res.json({
       message: 'Currency added successfully',
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         phone: user.phone,
         balance_NSL: user.balance_NSL,
@@ -300,11 +307,15 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
 router.patch('/users/:id/suspend', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateApproveReject, async (req, res) => {
   try {
     const { reason } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+
+    await User.update(
       { status: 'frozen' },
-      { new: true }
-    ).select('-password_hash');
+      { where: { id: req.params.id } }
+    );
+
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -325,11 +336,14 @@ router.patch('/users/:id/suspend', authenticate, authorize(['superadmin', 'finan
 // Finance: Activate user account
 router.patch('/users/:id/activate', authenticate, authorize(['superadmin', 'finance']), financeLimiter, async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+    await User.update(
       { status: 'active' },
-      { new: true }
-    ).select('-password_hash');
+      { where: { id: req.params.id } }
+    );
+
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -350,11 +364,14 @@ router.patch('/users/:id/activate', authenticate, authorize(['superadmin', 'fina
 // Finance: Approve user account (for pending users)
 router.patch('/users/:id/approve', authenticate, authorize(['superadmin', 'finance']), financeLimiter, async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+    await User.update(
       { status: 'active', kyc_verified: true },
-      { new: true }
-    ).select('-password_hash');
+      { where: { id: req.params.id } }
+    );
+
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -389,7 +406,7 @@ router.patch('/users/:id/approve', authenticate, authorize(['superadmin', 'finan
 router.patch('/transactions/:id/add-note', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateApproveReject, async (req, res) => {
   try {
     const { reason } = req.body; // Using 'reason' field from validation
-    const transaction = await Transaction.findById(req.params.id);
+    const transaction = await Transaction.findByPk(req.params.id);
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found' });
@@ -411,12 +428,12 @@ router.patch('/transactions/:id/add-note', authenticate, authorize(['superadmin'
     }
 
     await transaction.save();
-    logger.info(`Admin note added to transaction ${transaction._id} by ${adminInfo}`);
+    logger.info(`Admin note added to transaction ${transaction.id} by ${adminInfo}`);
 
     res.json({
       message: 'Note added successfully',
       transaction: {
-        id: transaction._id,
+        id: transaction.id,
         admin_notes: transaction.admin_notes,
         status: transaction.status
       }
@@ -430,10 +447,13 @@ router.patch('/transactions/:id/add-note', authenticate, authorize(['superadmin'
 // Finance: Get transaction details with notes
 router.get('/transactions/:id', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
   try {
-    const transaction = await Transaction.findById(req.params.id)
-      .populate('user_id', 'phone username email balance_NSL balance_usdt')
-      .populate('approved_by', 'phone username')
-      .populate('product_id', 'name price_NSL');
+    const transaction = await Transaction.findByPk(req.params.id, {
+      include: [
+        { model: User, as: 'user', attributes: ['phone', 'username', 'email', 'balance_NSL', 'balance_usdt'] },
+        { model: User, as: 'approver', attributes: ['phone', 'username'] },
+        { model: Product, as: 'product', attributes: ['name', 'price_NSL'] }
+      ]
+    });
 
     if (!transaction) {
       return res.status(404).json({ message: 'Transaction not found' });
@@ -454,20 +474,29 @@ router.get('/activity-log', authenticate, authorize(['superadmin']), async (req,
     const { limit = 50, skip = 0 } = req.query;
 
     // Get all transactions approved by finance users
-    const financeUsers = await User.find({ role: 'finance' }).select('_id phone');
-    const financeIds = financeUsers.map(u => u._id);
+    const financeUsers = await User.findAll({
+      where: { role: 'finance' },
+      attributes: ['id', 'phone']
+    });
+    const financeIds = financeUsers.map(u => u.id);
 
-    const activities = await Transaction.find({
-      approved_by: { $in: financeIds }
-    })
-      .populate('user_id', 'phone username')
-      .populate('approved_by', 'phone username')
-      .sort({ completed_at: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip));
+    const activities = await Transaction.findAll({
+      where: {
+        approved_by: { [Op.in]: financeIds }
+      },
+      include: [
+        { model: User, as: 'user', attributes: ['phone', 'username'] },
+        { model: User, as: 'approver', attributes: ['phone', 'username'] }
+      ],
+      order: [['completed_at', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(skip)
+    });
 
-    const total = await Transaction.countDocuments({
-      approved_by: { $in: financeIds }
+    const total = await Transaction.count({
+      where: {
+        approved_by: { [Op.in]: financeIds }
+      }
     });
 
     res.json({
@@ -484,4 +513,4 @@ router.get('/activity-log', authenticate, authorize(['superadmin']), async (req,
   }
 });
 
-module.exports = router; 
+module.exports = router;

@@ -1,6 +1,5 @@
 const express = require('express');
 const http = require('http');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const compression = require('compression');
 const dotenv = require('dotenv');
@@ -9,7 +8,6 @@ const logger = require('./utils/logger');
 
 // Security middleware
 const {
-  sanitizeInput,
   securityHeaders,
   globalLimiter,
   requestLogger,
@@ -56,7 +54,6 @@ app.use(compression()); // Compress responses
 app.use(securityHeaders); // Security headers via Helmet
 app.use(express.json({ limit: '10mb' })); // Parse JSON with size limit
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(sanitizeInput); // Prevent NoSQL injection
 app.use(preventParameterPollution); // Prevent parameter pollution
 app.use(requestLogger); // Log all requests
 app.use(validateContentType); // Validate content types
@@ -74,12 +71,18 @@ app.use('/uploads', (req, res, next) => {
 app.use('/api/', globalLimiter);
 
 // Database Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/salonmoney', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => logger.info('MongoDB connected'))
-.catch(err => logger.error('MongoDB connection error:', err));
+const { sequelize } = require('./models');
+
+(async () => {
+  try {
+    await sequelize.authenticate();
+    logger.info('MySQL connected');
+    await sequelize.sync();
+    logger.info('Database tables synced');
+  } catch (err) {
+    logger.error('MySQL connection error:', err);
+  }
+})();
 
 // Initialize Socket.io
 const { initializeSocket } = require('./config/socket');
@@ -121,54 +124,62 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/binance', binanceRoutes);
 
 // Health Check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'Server is running', timestamp: new Date() });
+app.get('/api/health', async (req, res) => {
+  try {
+    await sequelize.authenticate();
+    res.json({ status: 'Server is running', database: 'connected', timestamp: new Date() });
+  } catch (err) {
+    res.status(503).json({ status: 'Server is running', database: 'disconnected', timestamp: new Date() });
+  }
 });
 
 // Cron Job: Daily Income (Enhanced with validity checking)
 cron.schedule('0 0 * * *', async () => {
   try {
     logger.info('Running daily income cron job...');
-    const User = require('./models/User');
-    const Transaction = require('./models/Transaction');
+    const { User, UserProduct, Product, Transaction } = require('./models');
 
-    const users = await User.find({ status: 'active' }).populate('products.product_id');
+    const userProducts = await UserProduct.findAll({
+      where: { is_active: true },
+      include: [
+        { model: Product, as: 'product' },
+        { model: User, as: 'user', where: { status: 'active' } }
+      ]
+    });
+
     const now = new Date();
     let totalIncomeGenerated = 0;
-    let totalUsersProcessed = 0;
+    const userIncomes = {};
 
-    for (let user of users) {
-      let userTotalIncome = 0;
+    for (const up of userProducts) {
+      if (up.expires_at > now && up.product && up.product.daily_income_NSL > 0) {
+        const dailyIncome = up.product.daily_income_NSL;
+        const userId = up.user_id;
 
-      for (let userProduct of user.products) {
-        // Check if product is active, not expired, and has daily income
-        if (
-          userProduct.is_active &&
-          userProduct.expires_at > now &&
-          userProduct.product_id &&
-          userProduct.product_id.daily_income_NSL > 0
-        ) {
-          const dailyIncome = userProduct.product_id.daily_income_NSL;
-          userTotalIncome += dailyIncome;
-
-          // Create income transaction for this specific product
-          await Transaction.create({
-            user_id: user._id,
-            type: 'income',
-            amount_NSL: dailyIncome,
-            product_id: userProduct.product_id._id,
-            status: 'approved',
-            notes: `Daily income from ${userProduct.product_id.name}`
-          });
+        if (!userIncomes[userId]) {
+          userIncomes[userId] = { user: up.user, total: 0 };
         }
-      }
+        userIncomes[userId].total += dailyIncome;
 
-      if (userTotalIncome > 0) {
-        user.balance_NSL += userTotalIncome;
-        await user.save();
-        totalIncomeGenerated += userTotalIncome;
+        await Transaction.create({
+          user_id: userId,
+          type: 'income',
+          amount_NSL: dailyIncome,
+          product_id: up.product_id,
+          status: 'approved',
+          notes: `Daily income from ${up.product.name}`
+        });
+      }
+    }
+
+    let totalUsersProcessed = 0;
+    for (const [userId, data] of Object.entries(userIncomes)) {
+      if (data.total > 0) {
+        data.user.balance_NSL = parseFloat(data.user.balance_NSL) + data.total;
+        await data.user.save();
+        totalIncomeGenerated += data.total;
         totalUsersProcessed++;
-        logger.info(`Income generated for ${user.phone}: ${userTotalIncome} NSL from ${user.products.filter(p => p.is_active && p.expires_at > now).length} products`);
+        logger.info(`Income generated for ${data.user.phone}: ${data.total} NSL`);
       }
     }
 
@@ -199,68 +210,82 @@ cron.schedule('0 */4 * * *', async () => {
 cron.schedule('1 0 * * *', async () => {
   try {
     logger.info('Running auto-renewal cron job...');
-    const User = require('./models/User');
-    const Transaction = require('./models/Transaction');
+    const { User, UserProduct, Product, Transaction } = require('./models');
 
-    const users = await User.find({ status: 'active' }).populate('products.product_id');
     const now = new Date();
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+
+    const expiringProducts = await UserProduct.findAll({
+      where: {
+        is_active: true,
+        auto_renew: true
+      },
+      include: [
+        { model: Product, as: 'product' },
+        { model: User, as: 'user', where: { status: 'active' } }
+      ]
+    });
 
     let totalRenewed = 0;
     let totalDeactivated = 0;
 
-    for (let user of users) {
-      let userModified = false;
+    for (const up of expiringProducts) {
+      if (up.expires_at <= tomorrow && up.expires_at > now && up.product) {
+        const product = up.product;
+        const user = up.user;
 
-      for (let userProduct of user.products) {
-        // Check if product expires within 24 hours and auto-renew is enabled
-        if (
-          userProduct.is_active &&
-          userProduct.auto_renew &&
-          userProduct.expires_at <= tomorrow &&
-          userProduct.expires_at > now &&
-          userProduct.product_id
-        ) {
-          const product = userProduct.product_id;
+        if (parseFloat(user.balance_NSL) >= product.price_NSL) {
+          user.balance_NSL = parseFloat(user.balance_NSL) - product.price_NSL;
+          up.expires_at = new Date(up.expires_at.getTime() + (product.validity_days * 24 * 60 * 60 * 1000));
 
-          // Check if user has sufficient balance
-          if (user.balance_NSL >= product.price_NSL) {
-            // Renew product
-            user.balance_NSL -= product.price_NSL;
-            userProduct.expires_at = new Date(userProduct.expires_at.getTime() + (product.validity_days * 24 * 60 * 60 * 1000));
+          await Transaction.create({
+            user_id: user.id,
+            type: 'renewal',
+            amount_NSL: product.price_NSL,
+            amount_usdt: product.price_usdt,
+            product_id: product.id,
+            status: 'approved',
+            notes: `Auto-renewal of ${product.name} for ${product.validity_days} days`
+          });
 
-            // Create renewal transaction
-            await Transaction.create({
-              user_id: user._id,
-              type: 'renewal',
-              amount_NSL: product.price_NSL,
-              amount_usdt: product.price_usdt,
-              product_id: product._id,
-              status: 'approved',
-              notes: `Auto-renewal of ${product.name} for ${product.validity_days} days`
-            });
-
-            totalRenewed++;
-            userModified = true;
-            logger.info(`Auto-renewed ${product.name} for ${user.phone} - New expiration: ${userProduct.expires_at.toLocaleDateString()}`);
-          } else {
-            // Insufficient balance - deactivate product
-            userProduct.is_active = false;
-            totalDeactivated++;
-            userModified = true;
-            logger.warn(`Failed to renew ${product.name} for ${user.phone} - Insufficient balance (need ${product.price_NSL} NSL, have ${user.balance_NSL} NSL)`);
-          }
+          await up.save();
+          await user.save();
+          totalRenewed++;
+          logger.info(`Auto-renewed ${product.name} for ${user.phone} - New expiration: ${up.expires_at.toLocaleDateString()}`);
+        } else {
+          up.is_active = false;
+          await up.save();
+          totalDeactivated++;
+          logger.warn(`Failed to renew ${product.name} for ${user.phone} - Insufficient balance (need ${product.price_NSL} NSL, have ${user.balance_NSL} NSL)`);
         }
-      }
-
-      if (userModified) {
-        await user.save();
       }
     }
 
     logger.info(`Auto-renewal cron completed: ${totalRenewed} products renewed, ${totalDeactivated} products deactivated`);
   } catch (error) {
     logger.error('Error in auto-renewal cron:', error);
+  }
+});
+
+// Cron Job: Cleanup expired sessions and notifications
+cron.schedule('0 2 * * *', async () => {
+  try {
+    logger.info('Running cleanup cron job...');
+    const { Session, Notification } = require('./models');
+    const { Op } = require('sequelize');
+    const now = new Date();
+
+    const deletedSessions = await Session.destroy({
+      where: { expires_at: { [Op.lt]: now } }
+    });
+
+    const deletedNotifications = await Notification.destroy({
+      where: { expires_at: { [Op.lt]: now } }
+    });
+
+    logger.info(`Cleanup completed: ${deletedSessions} expired sessions, ${deletedNotifications} expired notifications removed`);
+  } catch (error) {
+    logger.error('Error in cleanup cron:', error);
   }
 });
 
@@ -284,18 +309,18 @@ app.use((err, req, res, next) => {
     ip: req.ip
   });
 
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
+  // Sequelize validation error
+  if (err.name === 'SequelizeValidationError') {
     return res.status(400).json({
       success: false,
       message: 'Validation Error',
-      errors: Object.values(err.errors).map(e => e.message)
+      errors: err.errors.map(e => e.message)
     });
   }
 
-  // Mongoose duplicate key error
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyPattern)[0];
+  // Sequelize unique constraint error
+  if (err.name === 'SequelizeUniqueConstraintError') {
+    const field = err.errors[0]?.path || 'field';
     return res.status(400).json({
       success: false,
       message: `${field} already exists`,

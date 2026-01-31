@@ -1,18 +1,5 @@
-const mongoSanitize = require('express-mongo-sanitize');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-
-/**
- * Request Sanitization Middleware
- * Prevents NoSQL injection by removing $ and . from user input
- */
-const sanitizeInput = mongoSanitize({
-  replaceWith: '_',
-  onSanitize: ({ req, key }) => {
-    const logger = require('../utils/logger');
-    logger.warn(`Potential NoSQL injection attempt detected. Field: ${key}`);
-  }
-});
 
 /**
  * Security Headers Middleware
@@ -38,11 +25,10 @@ const securityHeaders = helmet({
 
 /**
  * Global Rate Limiter
- * Prevents brute force attacks by limiting requests per IP
  */
 const globalLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 150, // Limit each IP to 150 requests per 5 minutes
+  windowMs: 5 * 60 * 1000,
+  max: 150,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -57,11 +43,10 @@ const globalLimiter = rateLimit({
 
 /**
  * Authentication Rate Limiter
- * Stricter limits for login/signup to prevent brute force
  */
 const authLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 15, // Limit each IP to 15 authentication attempts per 5 minutes
+  windowMs: 5 * 60 * 1000,
+  max: 15,
   skipSuccessfulRequests: true,
   message: 'Too many authentication attempts. Please try again later.',
   handler: (req, res) => {
@@ -75,11 +60,10 @@ const authLimiter = rateLimit({
 
 /**
  * Transaction Rate Limiter
- * Prevents spam of transaction requests
  */
 const transactionLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 30, // Limit each user to 30 transactions per hour
+  windowMs: 60 * 60 * 1000,
+  max: 30,
   message: 'Too many transaction requests. Please try again later.',
   handler: (req, res) => {
     res.status(429).json({
@@ -92,11 +76,10 @@ const transactionLimiter = rateLimit({
 
 /**
  * Admin Action Rate Limiter
- * Limits admin operations to prevent accidental bulk operations
  */
 const adminLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 30, // 30 admin requests per minute
+  windowMs: 60 * 1000,
+  max: 30,
   message: 'Too many admin operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -109,11 +92,10 @@ const adminLimiter = rateLimit({
 
 /**
  * Finance Action Rate Limiter
- * Limits finance operations to prevent errors
  */
 const financeLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutes
-  max: 30, // 30 finance requests per 5 minutes
+  windowMs: 5 * 60 * 1000,
+  max: 30,
   message: 'Too many finance operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -126,11 +108,10 @@ const financeLimiter = rateLimit({
 
 /**
  * Password Reset Rate Limiter
- * Prevents password reset spam
  */
 const passwordResetLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5, // Maximum 5 password reset requests per hour
+  windowMs: 60 * 60 * 1000,
+  max: 5,
   message: 'Too many password reset attempts.',
   handler: (req, res) => {
     res.status(429).json({
@@ -146,7 +127,6 @@ const passwordResetLimiter = rateLimit({
  */
 const ipWhitelist = (allowedIPs = []) => {
   return (req, res, next) => {
-    // Skip in development
     if (process.env.NODE_ENV !== 'production') {
       return next();
     }
@@ -166,7 +146,6 @@ const ipWhitelist = (allowedIPs = []) => {
 
 /**
  * Request Logger Middleware
- * Logs all requests for security auditing
  */
 const requestLogger = (req, res, next) => {
   const logger = require('../utils/logger');
@@ -179,7 +158,6 @@ const requestLogger = (req, res, next) => {
     timestamp: new Date().toISOString()
   };
 
-  // Log authenticated user if available
   if (req.user) {
     logData.userId = req.user.id;
     logData.userRole = req.user.role;
@@ -191,7 +169,6 @@ const requestLogger = (req, res, next) => {
 
 /**
  * Validate Content Type
- * Ensures requests have proper content-type
  */
 const validateContentType = (req, res, next) => {
   if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
@@ -210,10 +187,8 @@ const validateContentType = (req, res, next) => {
 
 /**
  * Prevent Parameter Pollution
- * Removes duplicate query parameters
  */
 const preventParameterPollution = (req, res, next) => {
-  // Convert array parameters to single values (use last value)
   Object.keys(req.query).forEach(key => {
     if (Array.isArray(req.query[key])) {
       req.query[key] = req.query[key][req.query[key].length - 1];
@@ -223,19 +198,12 @@ const preventParameterPollution = (req, res, next) => {
   next();
 };
 
-// --- FIXED FUNCTION ---
 /**
  * Helper function to reset all rate limits for a specific IP
- * Note: This function is now a no-op as express-rate-limit v6+
- * doesn't expose resetKey() method directly.
- * Rate limits will auto-expire based on windowMs.
  */
 const resetLimitsForIP = async (ip) => {
   const logger = require('../utils/logger');
   try {
-    // In express-rate-limit v6+, we can't directly reset keys
-    // Instead, we return a success response
-    // The limits will auto-reset after their windowMs period
     logger.info(`Rate limit reset requested for IP: ${ip} (limits will auto-expire)`);
     return { success: true, message: 'Rate limits will auto-expire based on configured windows' };
   } catch (error) {
@@ -243,10 +211,8 @@ const resetLimitsForIP = async (ip) => {
     return { success: false, message: error.message };
   }
 };
-// -------------------------------
 
 module.exports = {
-  sanitizeInput,
   securityHeaders,
   globalLimiter,
   authLimiter,
@@ -254,7 +220,7 @@ module.exports = {
   adminLimiter,
   financeLimiter,
   passwordResetLimiter,
-  resetLimitsForIP, // Added to exports
+  resetLimitsForIP,
   ipWhitelist,
   requestLogger,
   validateContentType,

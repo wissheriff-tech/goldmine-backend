@@ -1,6 +1,6 @@
 const express = require('express');
-const User = require('../models/User');
-const Transaction = require('../models/Transaction');
+const { User, Transaction, sequelize } = require('../models');
+const { Op } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
@@ -20,9 +20,9 @@ router.post('/users/update-status', authenticate, authorize(['superadmin', 'admi
       return res.status(400).json({ message: 'Invalid status' });
     }
 
-    const result = await User.updateMany(
-      { _id: { $in: user_ids } },
-      { status, updated_at: new Date() }
+    const [updatedCount] = await User.update(
+      { status, updated_at: new Date() },
+      { where: { id: { [Op.in]: user_ids } } }
     );
 
     // Send notifications to affected users
@@ -48,8 +48,8 @@ router.post('/users/update-status', authenticate, authorize(['superadmin', 'admi
 
     res.json({
       message: 'Batch status update successful',
-      updated_count: result.modifiedCount,
-      matched_count: result.matchedCount
+      updated_count: updatedCount,
+      matched_count: user_ids.length
     });
   } catch (error) {
     logger.error('Batch status update error:', error);
@@ -71,9 +71,9 @@ router.post('/users/update-vip', authenticate, authorize(['superadmin', 'admin']
       return res.status(400).json({ message: 'Invalid VIP level' });
     }
 
-    const result = await User.updateMany(
-      { _id: { $in: user_ids } },
-      { vip_level, updated_at: new Date() }
+    const [updatedCount] = await User.update(
+      { vip_level, updated_at: new Date() },
+      { where: { id: { [Op.in]: user_ids } } }
     );
 
     // Send VIP upgrade notifications
@@ -91,8 +91,8 @@ router.post('/users/update-vip', authenticate, authorize(['superadmin', 'admin']
 
     res.json({
       message: 'Batch VIP update successful',
-      updated_count: result.modifiedCount,
-      matched_count: result.matchedCount
+      updated_count: updatedCount,
+      matched_count: user_ids.length
     });
   } catch (error) {
     logger.error('Batch VIP update error:', error);
@@ -117,31 +117,42 @@ router.post('/users/add-currency', authenticate, authorize(['superadmin', 'admin
       return res.status(400).json({ message: 'Reason must be at least 5 characters' });
     }
 
-    const updateData = { updated_at: new Date() };
-    if (amount_NSL) updateData.$inc = { balance_NSL: parseFloat(amount_NSL) };
-    if (amount_usdt) {
-      updateData.$inc = updateData.$inc || {};
-      updateData.$inc.balance_usdt = parseFloat(amount_usdt);
-    }
+    // Use a transaction for atomicity
+    const result = await sequelize.transaction(async (t) => {
+      // Increment balances using Sequelize literal for atomic updates
+      const incrementFields = {};
+      if (amount_NSL) incrementFields.balance_NSL = parseFloat(amount_NSL);
+      if (amount_usdt) incrementFields.balance_usdt = parseFloat(amount_usdt);
 
-    const result = await User.updateMany(
-      { _id: { $in: user_ids } },
-      updateData
-    );
+      // Update each user's balance atomically
+      const users = await User.findAll({
+        where: { id: { [Op.in]: user_ids } },
+        transaction: t
+      });
 
-    // Create transaction records for each user
-    const transactions = user_ids.map(userId => ({
-      user_id: userId,
-      type: 'recharge',
-      amount_NSL: amount_NSL || 0,
-      amount_usdt: amount_usdt || 0,
-      status: 'approved',
-      approved_by: req.user.id,
-      notes: `Batch currency addition: ${reason}`,
-      completed_at: new Date()
-    }));
+      for (const user of users) {
+        if (amount_NSL) user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(amount_NSL);
+        if (amount_usdt) user.balance_usdt = (parseFloat(user.balance_usdt) || 0) + parseFloat(amount_usdt);
+        user.updated_at = new Date();
+        await user.save({ transaction: t });
+      }
 
-    await Transaction.insertMany(transactions);
+      // Create transaction records for each user
+      const transactions = user_ids.map(userId => ({
+        user_id: userId,
+        type: 'recharge',
+        amount_NSL: amount_NSL || 0,
+        amount_usdt: amount_usdt || 0,
+        status: 'approved',
+        approved_by: req.user.id,
+        notes: `Batch currency addition: ${reason}`,
+        completed_at: new Date()
+      }));
+
+      await Transaction.bulkCreate(transactions, { transaction: t });
+
+      return { updatedCount: users.length, transactionsCreated: transactions.length };
+    });
 
     // Send notifications
     await notificationService.createBulk(
@@ -156,9 +167,9 @@ router.post('/users/add-currency', authenticate, authorize(['superadmin', 'admin
 
     res.json({
       message: 'Batch currency addition successful',
-      updated_count: result.modifiedCount,
-      matched_count: result.matchedCount,
-      transactions_created: transactions.length
+      updated_count: result.updatedCount,
+      matched_count: user_ids.length,
+      transactions_created: result.transactionsCreated
     });
   } catch (error) {
     logger.error('Batch currency addition error:', error);
@@ -176,24 +187,24 @@ router.post('/users/delete', authenticate, authorize(['superadmin']), async (req
     }
 
     // Prevent deleting superadmin accounts
-    const users = await User.find({ _id: { $in: user_ids } });
+    const users = await User.findAll({ where: { id: { [Op.in]: user_ids } } });
     const superadmins = users.filter(u => u.role === 'superadmin');
 
     if (superadmins.length > 0) {
       return res.status(403).json({ message: 'Cannot delete superadmin accounts' });
     }
 
-    const result = await User.updateMany(
-      { _id: { $in: user_ids }, role: { $ne: 'superadmin' } },
-      { status: 'frozen', updated_at: new Date() }
+    const [updatedCount] = await User.update(
+      { status: 'frozen', updated_at: new Date() },
+      { where: { id: { [Op.in]: user_ids }, role: { [Op.ne]: 'superadmin' } } }
     );
 
     logger.warn(`Batch user deletion by ${req.user.phone}: ${user_ids.length} users frozen - Reason: ${reason || 'No reason provided'}`);
 
     res.json({
       message: 'Batch user deletion (freeze) successful',
-      updated_count: result.modifiedCount,
-      matched_count: result.matchedCount
+      updated_count: updatedCount,
+      matched_count: user_ids.length
     });
   } catch (error) {
     logger.error('Batch user deletion error:', error);
@@ -210,10 +221,13 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
       return res.status(400).json({ message: 'Transaction IDs array is required' });
     }
 
-    const transactions = await Transaction.find({
-      _id: { $in: transaction_ids },
-      status: 'pending'
-    }).populate('user_id');
+    const transactions = await Transaction.findAll({
+      where: {
+        id: { [Op.in]: transaction_ids },
+        status: 'pending'
+      },
+      include: [{ model: User, as: 'user' }]
+    });
 
     if (transactions.length === 0) {
       return res.status(404).json({ message: 'No pending transactions found' });
@@ -227,24 +241,24 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
 
     for (const transaction of transactions) {
       try {
-        const user = transaction.user_id;
+        const user = transaction.user;
 
         if (!user) {
           results.failed++;
-          results.errors.push({ transaction_id: transaction._id, error: 'User not found' });
+          results.errors.push({ transaction_id: transaction.id, error: 'User not found' });
           continue;
         }
 
         // Update user balance
         if (transaction.type === 'recharge') {
-          user.balance_NSL += transaction.amount_NSL;
+          user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(transaction.amount_NSL);
         } else if (transaction.type === 'withdrawal') {
-          if (user.balance_NSL < transaction.amount_NSL) {
+          if (parseFloat(user.balance_NSL) < parseFloat(transaction.amount_NSL)) {
             results.failed++;
-            results.errors.push({ transaction_id: transaction._id, error: 'Insufficient balance' });
+            results.errors.push({ transaction_id: transaction.id, error: 'Insufficient balance' });
             continue;
           }
-          user.balance_NSL -= transaction.amount_NSL;
+          user.balance_NSL = (parseFloat(user.balance_NSL) || 0) - parseFloat(transaction.amount_NSL);
         }
 
         transaction.status = 'approved';
@@ -257,7 +271,7 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
 
         // Send notification
         await notificationService.notifyTransactionApproved(
-          user._id,
+          user.id,
           transaction.type,
           transaction.amount_NSL
         );
@@ -265,8 +279,8 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
         results.approved++;
       } catch (error) {
         results.failed++;
-        results.errors.push({ transaction_id: transaction._id, error: error.message });
-        logger.error(`Batch approval error for transaction ${transaction._id}:`, error);
+        results.errors.push({ transaction_id: transaction.id, error: error.message });
+        logger.error(`Batch approval error for transaction ${transaction.id}:`, error);
       }
     }
 
@@ -295,27 +309,29 @@ router.post('/transactions/reject', authenticate, authorize(['superadmin', 'fina
       return res.status(400).json({ message: 'Reason is required for rejection' });
     }
 
-    const transactions = await Transaction.find({
-      _id: { $in: transaction_ids },
-      status: 'pending'
-    }).populate('user_id');
+    const transactions = await Transaction.findAll({
+      where: {
+        id: { [Op.in]: transaction_ids },
+        status: 'pending'
+      },
+      include: [{ model: User, as: 'user' }]
+    });
 
-    const result = await Transaction.updateMany(
-      { _id: { $in: transaction_ids }, status: 'pending' },
+    const [updatedCount] = await Transaction.update(
       {
         status: 'rejected',
         approved_by: req.user.id,
         notes: reason,
         completed_at: new Date()
-      }
+      },
+      { where: { id: { [Op.in]: transaction_ids }, status: 'pending' } }
     );
 
     // Send notifications
-    const userIds = transactions.map(t => t.user_id._id);
     for (const transaction of transactions) {
-      if (transaction.user_id) {
+      if (transaction.user) {
         await notificationService.notifyTransactionRejected(
-          transaction.user_id._id,
+          transaction.user.id,
           transaction.type,
           transaction.amount_NSL,
           reason
@@ -323,12 +339,12 @@ router.post('/transactions/reject', authenticate, authorize(['superadmin', 'fina
       }
     }
 
-    logger.info(`Batch transaction rejection by ${req.user.phone}: ${result.modifiedCount} rejected`);
+    logger.info(`Batch transaction rejection by ${req.user.phone}: ${updatedCount} rejected`);
 
     res.json({
       message: 'Batch transaction rejection successful',
-      rejected_count: result.modifiedCount,
-      matched_count: result.matchedCount
+      rejected_count: updatedCount,
+      matched_count: transaction_ids.length
     });
   } catch (error) {
     logger.error('Batch transaction rejection error:', error);

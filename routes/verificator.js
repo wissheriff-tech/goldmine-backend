@@ -1,5 +1,5 @@
 const express = require('express');
-const User = require('../models/User');
+const { User } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -8,9 +8,11 @@ const router = express.Router();
 // Verificator: Get pending users
 router.get('/users/pending', authenticate, authorize(['superadmin', 'verificator']), async (req, res) => {
   try {
-    const users = await User.find({ status: 'pending' })
-      .select('-password_hash')
-      .sort({ created_at: -1 });
+    const users = await User.findAll({
+      where: { status: 'pending' },
+      attributes: { exclude: ['password_hash'] },
+      order: [['created_at', 'DESC']]
+    });
 
     res.json(users);
   } catch (error) {
@@ -22,7 +24,7 @@ router.get('/users/pending', authenticate, authorize(['superadmin', 'verificator
 // Verificator: Verify user
 router.patch('/users/:id/verify', authenticate, authorize(['superadmin', 'verificator']), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findByPk(req.params.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -37,7 +39,7 @@ router.patch('/users/:id/verify', authenticate, authorize(['superadmin', 'verifi
     res.json({
       message: 'User verified and activated',
       user: {
-        id: user._id,
+        id: user.id,
         phone: user.phone,
         status: user.status,
         kyc_verified: user.kyc_verified
@@ -53,22 +55,24 @@ router.patch('/users/:id/verify', authenticate, authorize(['superadmin', 'verifi
 router.patch('/users/:id/reject', authenticate, authorize(['superadmin', 'verificator']), async (req, res) => {
   try {
     const { reason } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+
+    const [affectedRows] = await User.update(
       { status: 'frozen' },
-      { new: true }
+      { where: { id: req.params.id } }
     );
 
-    if (!user) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const user = await User.findByPk(req.params.id);
 
     logger.warn(`User rejected: ${user.phone} - Reason: ${reason}`);
 
     res.json({
       message: 'User rejected',
       user: {
-        id: user._id,
+        id: user.id,
         phone: user.phone,
         status: user.status
       }

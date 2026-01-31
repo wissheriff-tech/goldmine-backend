@@ -1,77 +1,117 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const transactionSchema = new mongoose.Schema({
+const Transaction = sequelize.define('Transaction', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   type: {
-    type: String,
-    enum: ['recharge', 'withdrawal', 'income', 'referral_bonus', 'purchase', 'renewal'],
-    required: true
+    type: DataTypes.ENUM('recharge', 'withdrawal', 'income', 'referral_bonus', 'purchase', 'renewal'),
+    allowNull: false
   },
   product_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Product',
-    default: null
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   },
   amount_NSL: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.DECIMAL(18, 4),
+    defaultValue: 0,
+    get() {
+      const val = this.getDataValue('amount_NSL');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   amount_usdt: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.DECIMAL(18, 4),
+    defaultValue: 0,
+    get() {
+      const val = this.getDataValue('amount_usdt');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   status: {
-    type: String,
-    enum: ['pending', 'approved', 'rejected', 'completed'],
-    default: 'pending'
+    type: DataTypes.ENUM('pending', 'approved', 'rejected', 'completed'),
+    defaultValue: 'pending'
   },
   approved_by: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   },
-  notes: String,
-  binance_tx_id: String,
-  binance_withdraw_id: String,
-  deposit_address: String,
+  notes: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  binance_tx_id: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  binance_withdraw_id: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  deposit_address: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
   deposit_network: {
-    type: String,
-    default: 'BSC'
+    type: DataTypes.STRING(50),
+    defaultValue: 'BSC'
   },
-  withdrawal_address: String,
+  withdrawal_address: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
   withdrawal_network: {
-    type: String,
-    default: 'BSC'
+    type: DataTypes.STRING(50),
+    defaultValue: 'BSC'
   },
   payment_method: {
-    type: String,
-    enum: ['binance', 'manual', 'crypto_wallet'],
-    default: 'binance'
+    type: DataTypes.ENUM('binance', 'manual', 'crypto_wallet'),
+    defaultValue: 'binance'
   },
-  payment_proof: String, // URL to uploaded payment proof
-  admin_notes: String,
+  payment_proof: {
+    type: DataTypes.STRING(500),
+    allowNull: true
+  },
+  admin_notes: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
   timestamp: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW
   },
-  completed_at: Date,
-  rejected_at: Date,
+  completed_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  rejected_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   confirmations: {
-    type: Number,
-    default: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0
   }
-}, { timestamps: true });
+}, {
+  tableName: 'transactions',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['user_id'] },
+    { fields: ['status'] },
+    { fields: ['type'] },
+    { fields: ['timestamp'] }
+  ]
+});
 
-// Index for fast lookups
-transactionSchema.index({ user_id: 1 });
-transactionSchema.index({ status: 1 });
-transactionSchema.index({ type: 1 });
-transactionSchema.index({ timestamp: -1 });
-
-module.exports = mongoose.model('Transaction', transactionSchema);
+module.exports = Transaction;

@@ -1,50 +1,46 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const sessionSchema = new mongoose.Schema({
+const Session = sequelize.define('Session', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    index: true
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   refresh_token: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING(500),
+    allowNull: false,
     unique: true
   },
   device_info: {
-    user_agent: String,
-    device_type: String, // mobile, desktop, tablet
-    os: String,
-    browser: String,
-    ip_address: String,
-    location: {
-      city: String,
-      country: String,
-      timezone: String
-    }
+    type: DataTypes.JSON,
+    allowNull: true
   },
   is_active: {
-    type: Boolean,
-    default: true
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   },
   last_activity: {
-    type: Date,
-    default: Date.now
-  },
-  created_at: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW
   },
   expires_at: {
-    type: Date,
-    required: true,
-    index: true
+    type: DataTypes.DATE,
+    allowNull: false
   }
-}, { timestamps: true });
+}, {
+  tableName: 'sessions',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['user_id', 'is_active'] },
+    { fields: ['expires_at'] }
+  ]
+});
 
-// Indexes
-sessionSchema.index({ user_id: 1, is_active: 1 });
-sessionSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 }); // Auto-delete expired sessions
-
-module.exports = mongoose.model('Session', sessionSchema);
+module.exports = Session;

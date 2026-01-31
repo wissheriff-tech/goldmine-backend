@@ -1,42 +1,49 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const twoFactorAuthSchema = new mongoose.Schema({
+const TwoFactorAuth = sequelize.define('TwoFactorAuth', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   user_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
+    type: DataTypes.INTEGER,
+    allowNull: false,
     unique: true
   },
   secret: {
-    type: String,
-    required: true
+    type: DataTypes.STRING,
+    allowNull: false
   },
-  backup_codes: [{
-    code: String,
-    used: {
-      type: Boolean,
-      default: false
-    },
-    used_at: Date
-  }],
+  backup_codes: {
+    type: DataTypes.JSON,
+    defaultValue: []
+  },
   enabled: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   method: {
-    type: String,
-    enum: ['app', 'sms', 'email'],
-    default: 'app'
+    type: DataTypes.ENUM('app', 'sms', 'email'),
+    defaultValue: 'app'
   },
-  verified_at: Date,
-  last_used: Date,
-  created_at: {
-    type: Date,
-    default: Date.now
+  verified_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  last_used: {
+    type: DataTypes.DATE,
+    allowNull: true
   }
-}, { timestamps: true });
+}, {
+  tableName: 'two_factor_auth',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['user_id'] }
+  ]
+});
 
-// Index
-twoFactorAuthSchema.index({ user_id: 1 });
-
-module.exports = mongoose.model('TwoFactorAuth', twoFactorAuthSchema);
+module.exports = TwoFactorAuth;

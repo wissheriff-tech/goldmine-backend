@@ -1,51 +1,62 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const currencyRateSchema = new mongoose.Schema({
+const CurrencyRate = sequelize.define('CurrencyRate', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   currency_code: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING(10),
+    allowNull: false,
     unique: true,
-    uppercase: true,
-    trim: true
+    set(val) {
+      this.setDataValue('currency_code', val ? val.toUpperCase().trim() : val);
+    }
   },
   currency_name: {
-    type: String,
-    required: true
+    type: DataTypes.STRING,
+    allowNull: false
   },
   rate_to_usd: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: false,
+    get() {
+      const val = this.getDataValue('rate_to_usd');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   rate_to_nsl: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: false,
+    get() {
+      const val = this.getDataValue('rate_to_nsl');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   enabled: {
-    type: Boolean,
-    default: true
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   },
   updated_by: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
-  updated_at: {
-    type: Date,
-    default: Date.now
-  },
-  created_at: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.INTEGER,
+    allowNull: true
   }
-}, { timestamps: true });
-
-// Auto-calculate rate_to_nsl based on rate_to_usd
-currencyRateSchema.pre('save', function(next) {
-  const NSL_PER_USDT = 25; // 1 USDT = 25 NSL
-  this.rate_to_nsl = this.rate_to_usd * NSL_PER_USDT;
-  this.updated_at = new Date();
-  next();
+}, {
+  tableName: 'currency_rates',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['currency_code'] }
+  ]
 });
 
-module.exports = mongoose.model('CurrencyRate', currencyRateSchema);
+// Auto-calculate rate_to_nsl
+CurrencyRate.beforeSave((rate) => {
+  const NSL_PER_USDT = 25;
+  rate.rate_to_nsl = rate.rate_to_usd * NSL_PER_USDT;
+});
+
+module.exports = CurrencyRate;

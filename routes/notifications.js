@@ -1,5 +1,6 @@
 const express = require('express');
-const Notification = require('../models/Notification');
+const { Notification, User } = require('../models');
+const { Op, fn, col } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
 const notificationService = require('../utils/notificationService');
 const logger = require('../utils/logger');
@@ -40,14 +41,14 @@ router.get('/unread-count', authenticate, async (req, res) => {
 // Mark notification as read
 router.patch('/:id/read', authenticate, async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id);
+    const notification = await Notification.findByPk(req.params.id);
 
     if (!notification) {
       return res.status(404).json({ message: 'Notification not found' });
     }
 
     // Verify notification belongs to user
-    if (notification.user_id.toString() !== req.user.id) {
+    if (notification.user_id.toString() !== req.user.id.toString()) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
@@ -77,14 +78,14 @@ router.patch('/mark-all-read', authenticate, async (req, res) => {
 // Delete notification
 router.delete('/:id', authenticate, async (req, res) => {
   try {
-    const notification = await Notification.findById(req.params.id);
+    const notification = await Notification.findByPk(req.params.id);
 
     if (!notification) {
       return res.status(404).json({ message: 'Notification not found' });
     }
 
     // Verify notification belongs to user
-    if (notification.user_id.toString() !== req.user.id) {
+    if (notification.user_id.toString() !== req.user.id.toString()) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
@@ -100,14 +101,16 @@ router.delete('/:id', authenticate, async (req, res) => {
 // Delete all read notifications
 router.delete('/clear-read', authenticate, async (req, res) => {
   try {
-    const result = await Notification.deleteMany({
-      user_id: req.user.id,
-      read: true
+    const deletedCount = await Notification.destroy({
+      where: {
+        user_id: req.user.id,
+        read: true
+      }
     });
 
     res.json({
       message: 'All read notifications cleared',
-      deleted_count: result.deletedCount
+      deleted_count: deletedCount
     });
   } catch (error) {
     logger.error('Clear read notifications error:', error);
@@ -128,9 +131,11 @@ router.post('/admin/announcement', authenticate, authorize(['superadmin', 'admin
 
     // If no specific users, send to all active users
     if (!userIds || userIds.length === 0) {
-      const User = require('../models/User');
-      const users = await User.find({ status: 'active' }).select('_id');
-      userIds = users.map(u => u._id);
+      const users = await User.findAll({
+        where: { status: 'active' },
+        attributes: ['id']
+      });
+      userIds = users.map(u => u.id);
     }
 
     await notificationService.createSystemAnnouncement(
@@ -155,37 +160,41 @@ router.post('/admin/announcement', authenticate, authorize(['superadmin', 'admin
 // Admin: Get notification statistics
 router.get('/admin/stats', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const totalNotifications = await Notification.countDocuments();
-    const unreadNotifications = await Notification.countDocuments({ read: false });
-    const readNotifications = await Notification.countDocuments({ read: true });
+    const totalNotifications = await Notification.count();
+    const unreadNotifications = await Notification.count({ where: { read: false } });
+    const readNotifications = await Notification.count({ where: { read: true } });
 
-    const notificationsByType = await Notification.aggregate([
-      {
-        $group: {
-          _id: '$type',
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $sort: { count: -1 }
-      }
-    ]);
+    const notificationsByType = await Notification.findAll({
+      attributes: [
+        'type',
+        [fn('COUNT', col('id')), 'count']
+      ],
+      group: ['type'],
+      order: [[fn('COUNT', col('id')), 'DESC']],
+      raw: true
+    });
 
-    const notificationsByPriority = await Notification.aggregate([
-      {
-        $group: {
-          _id: '$priority',
-          count: { $sum: 1 }
-        }
-      }
-    ]);
+    const notificationsByPriority = await Notification.findAll({
+      attributes: [
+        'priority',
+        [fn('COUNT', col('id')), 'count']
+      ],
+      group: ['priority'],
+      raw: true
+    });
 
     res.json({
       total: totalNotifications,
       unread: unreadNotifications,
       read: readNotifications,
-      by_type: notificationsByType,
-      by_priority: notificationsByPriority
+      by_type: notificationsByType.map(n => ({
+        _id: n.type,
+        count: parseInt(n.count)
+      })),
+      by_priority: notificationsByPriority.map(n => ({
+        _id: n.priority,
+        count: parseInt(n.count)
+      }))
     });
   } catch (error) {
     logger.error('Get notification stats error:', error);

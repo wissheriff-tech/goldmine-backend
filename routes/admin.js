@@ -1,8 +1,8 @@
 const express = require('express');
-const User = require('../models/User');
+const { User, Product, UserProduct, Transaction } = require('../models');
+const { Op } = require('sequelize');
+const sequelize = require('sequelize');
 const bcrypt = require('bcryptjs');
-const Transaction = require('../models/Transaction');
-const Product = require('../models/Product');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -30,12 +30,14 @@ router.get('/users', authenticate, authorize(['superadmin']), async (req, res) =
     if (status) filter.status = status;
     if (role) filter.role = role;
 
-    const users = await User.find(filter)
-      .select('-password_hash')
-      .limit(parseInt(limit))
-      .skip(parseInt(skip));
+    const users = await User.findAll({
+      where: filter,
+      attributes: { exclude: ['password_hash'] },
+      limit: parseInt(limit),
+      offset: parseInt(skip)
+    });
 
-    const total = await User.countDocuments(filter);
+    const total = await User.count({ where: filter });
 
     res.json({
       users,
@@ -54,15 +56,25 @@ router.get('/users', authenticate, authorize(['superadmin']), async (req, res) =
 // Admin: Get user details
 router.get('/users/:id', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id)
-      .select('-password_hash')
-      .populate('products');
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] },
+      include: [
+        {
+          model: UserProduct,
+          as: 'products',
+          include: [{ model: Product, as: 'product' }]
+        }
+      ]
+    });
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const transactions = await Transaction.find({ user_id: user._id }).limit(10);
+    const transactions = await Transaction.findAll({
+      where: { user_id: user.id },
+      limit: 10
+    });
 
     res.json({
       user,
@@ -84,15 +96,18 @@ router.patch('/users/:id/role', authenticate, authorize(['superadmin']), adminLi
       return res.status(400).json({ message: 'Invalid role' });
     }
 
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+    const [affectedRows] = await User.update(
       { role },
-      { new: true }
-    ).select('-password_hash');
+      { where: { id: req.params.id } }
+    );
 
-    if (!user) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
 
     logger.info(`User role updated: ${user.phone} - ${role}`);
 
@@ -116,15 +131,18 @@ router.patch('/users/:id/status', authenticate, authorize(['superadmin']), admin
       return res.status(400).json({ message: 'Invalid status' });
     }
 
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+    const [affectedRows] = await User.update(
       { status },
-      { new: true }
-    ).select('-password_hash');
+      { where: { id: req.params.id } }
+    );
 
-    if (!user) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
 
     logger.info(`User status updated: ${user.phone} - ${status}`);
 
@@ -148,23 +166,25 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin']), admi
     if (balance_NSL !== undefined) updateData.balance_NSL = balance_NSL;
     if (balance_usdt !== undefined) updateData.balance_usdt = balance_usdt;
 
-    // Use findByIdAndUpdate to avoid triggering password hashing middleware
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+    const [affectedRows] = await User.update(
       updateData,
-      { new: true, runValidators: true }
-    ).select('-password_hash');
+      { where: { id: req.params.id } }
+    );
 
-    if (!user) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
 
     logger.warn(`Balance adjusted for ${user.phone}: NSL=${balance_NSL}, USDT=${balance_usdt}, Reason: ${reason}`);
 
     res.json({
       message: 'User balance updated',
       user: {
-        id: user._id,
+        id: user.id,
         phone: user.phone,
         balance_NSL: user.balance_NSL,
         balance_usdt: user.balance_usdt
@@ -186,15 +206,18 @@ router.patch('/users/:id/vip', authenticate, authorize(['superadmin']), adminLim
       return res.status(400).json({ message: 'Invalid VIP level' });
     }
 
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
+    const [affectedRows] = await User.update(
       { vip_level },
-      { new: true }
-    ).select('-password_hash');
+      { where: { id: req.params.id } }
+    );
 
-    if (!user) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    const user = await User.findByPk(req.params.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
 
     logger.info(`User VIP level updated: ${user.phone} - ${vip_level}`);
 
@@ -217,13 +240,17 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
       return res.status(400).json({ message: 'Username, phone and password are required' });
     }
 
-    const userExists = await User.findOne({ $or: [{ phone }, { username }] });
+    const userExists = await User.findOne({
+      where: {
+        [Op.or]: [{ phone }, { username }]
+      }
+    });
     if (userExists) {
       return res.status(400).json({ message: 'User with this phone or username already exists' });
     }
 
     const referral_code = Math.random().toString(36).substring(2, 12).toUpperCase();
-    const user = new User({
+    const user = await User.create({
       username,
       phone,
       password_hash: password,
@@ -233,13 +260,12 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
       kyc_verified: true
     });
 
-    await user.save();
     logger.info(`New user created by admin: ${username} (${phone})`);
 
     res.status(201).json({
       message: 'User created successfully',
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         phone: user.phone,
         role: user.role,
@@ -276,7 +302,11 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
     }
 
     // Check if user already exists
-    const userExists = await User.findOne({ $or: [{ phone }, { username }] });
+    const userExists = await User.findOne({
+      where: {
+        [Op.or]: [{ phone }, { username }]
+      }
+    });
     if (userExists) {
       return res.status(400).json({
         message: 'User with this phone or username already exists'
@@ -290,7 +320,7 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
     const referral_code = Math.random().toString(36).substring(2, 12).toUpperCase();
 
     // Create admin user
-    const adminUser = new User({
+    const adminUser = await User.create({
       username,
       phone,
       email: email || `${username}@salonmoney.com`,
@@ -304,15 +334,13 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
       balance_usdt: 0
     });
 
-    await adminUser.save();
-
     logger.info(`New ${role} created by superadmin ${req.user.phone}: ${username} (${phone})`);
 
     res.status(201).json({
       success: true,
       message: `${role.charAt(0).toUpperCase() + role.slice(1)} user created successfully`,
       user: {
-        id: adminUser._id,
+        id: adminUser.id,
         username: adminUser.username,
         phone: adminUser.phone,
         email: adminUser.email,
@@ -338,7 +366,7 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
 
 router.delete('/users/:id', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findByPk(req.params.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -349,7 +377,7 @@ router.delete('/users/:id', authenticate, authorize(['superadmin']), async (req,
       return res.status(403).json({ message: 'Cannot delete superadmin accounts' });
     }
 
-    await User.findByIdAndDelete(req.params.id);
+    await User.destroy({ where: { id: req.params.id } });
     logger.warn(`User deleted by admin: ${user.phone}`);
 
     res.json({
@@ -374,14 +402,18 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
     if (type) filter.type = type;
     if (status) filter.status = status;
 
-    const transactions = await Transaction.find(filter)
-      .populate('user_id', 'phone')
-      .populate('approved_by', 'phone')
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip));
+    const transactions = await Transaction.findAll({
+      where: filter,
+      include: [
+        { model: User, as: 'user', attributes: ['phone'] },
+        { model: User, as: 'approver', attributes: ['phone'] }
+      ],
+      order: [['timestamp', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(skip)
+    });
 
-    const total = await Transaction.countDocuments(filter);
+    const total = await Transaction.count({ where: filter });
 
     res.json({
       transactions,
@@ -402,7 +434,9 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
 // Admin: Get all products
 router.get('/products', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const products = await Product.find().sort({ price_NSL: 1 });
+    const products = await Product.findAll({
+      order: [['price_NSL', 'ASC']]
+    });
 
     res.json({
       products,
@@ -417,35 +451,33 @@ router.get('/products', authenticate, authorize(['superadmin', 'admin']), async 
 // Admin: Get product statistics
 router.get('/products/stats', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const products = await Product.find();
+    const products = await Product.findAll();
     const stats = [];
 
     for (const product of products) {
-      // Count active purchases
-      const totalPurchases = await User.countDocuments({
-        'products.product_id': product._id,
-        'products.is_active': true
+      // Count active purchases via UserProduct table
+      const totalPurchases = await UserProduct.count({
+        where: {
+          product_id: product.id,
+          is_active: true
+        }
       });
 
       // Calculate total revenue from purchases and renewals
-      const totalRevenue = await Transaction.aggregate([
-        {
-          $match: {
-            product_id: product._id,
-            type: { $in: ['purchase', 'renewal'] },
-            status: 'approved'
-          }
+      const revenueResult = await Transaction.findAll({
+        where: {
+          product_id: product.id,
+          type: { [Op.in]: ['purchase', 'renewal'] },
+          status: 'approved'
         },
-        {
-          $group: {
-            _id: null,
-            total: { $sum: '$amount_NSL' }
-          }
-        }
-      ]);
+        attributes: [
+          [sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']
+        ],
+        raw: true
+      });
 
       stats.push({
-        product_id: product._id,
+        product_id: product.id,
         product_name: product.name,
         price_NSL: product.price_NSL,
         price_usdt: product.price_usdt,
@@ -453,7 +485,7 @@ router.get('/products/stats', authenticate, authorize(['superadmin', 'admin']), 
         validity_days: product.validity_days,
         active: product.active,
         total_purchases: totalPurchases,
-        total_revenue_NSL: totalRevenue[0]?.total || 0,
+        total_revenue_NSL: parseFloat(revenueResult[0]?.total) || 0,
         active_users: totalPurchases
       });
     }
@@ -492,7 +524,7 @@ router.post('/products', authenticate, authorize(['superadmin', 'admin']), async
     }
 
     // Check if product already exists
-    const existingProduct = await Product.findOne({ name });
+    const existingProduct = await Product.findOne({ where: { name } });
     if (existingProduct) {
       return res.status(400).json({ message: 'Product with this name already exists' });
     }
@@ -536,11 +568,13 @@ router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), 
       updates.price_usdt = (updates.price_NSL / nslToUsdt).toFixed(2);
     }
 
-    const product = await Product.findByIdAndUpdate(id, updates, { new: true });
+    const [affectedRows] = await Product.update(updates, { where: { id } });
 
-    if (!product) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
+
+    const product = await Product.findByPk(id);
 
     logger.info(`Product updated by admin: ${product.name}`);
 
@@ -557,15 +591,16 @@ router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), 
 // Admin: Delete product (soft delete)
 router.delete('/products/:id', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
+    const [affectedRows] = await Product.update(
       { active: false },
-      { new: true }
+      { where: { id: req.params.id } }
     );
 
-    if (!product) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
+
+    const product = await Product.findByPk(req.params.id);
 
     logger.warn(`Product deactivated by admin: ${product.name}`);
 
@@ -582,7 +617,7 @@ router.delete('/products/:id', authenticate, authorize(['superadmin', 'admin']),
 // Admin: Toggle product active status
 router.patch('/products/:id/toggle', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const product = await Product.findById(req.params.id);
+    const product = await Product.findByPk(req.params.id);
 
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });
@@ -607,15 +642,17 @@ router.patch('/products/:id/toggle', authenticate, authorize(['superadmin', 'adm
 router.patch('/products/:id/toggle-active', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
     const { is_active } = req.body;
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
+
+    const [affectedRows] = await Product.update(
       { active: is_active },
-      { new: true }
+      { where: { id: req.params.id } }
     );
 
-    if (!product) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
+
+    const product = await Product.findByPk(req.params.id);
 
     logger.info(`Product ${is_active ? 'activated' : 'deactivated'}: ${product.name}`);
 
@@ -632,15 +669,16 @@ router.patch('/products/:id/toggle-active', authenticate, authorize(['superadmin
 // Admin: Suspend product
 router.patch('/products/:id/suspend', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
+    const [affectedRows] = await Product.update(
       { active: false, suspended: true },
-      { new: true }
+      { where: { id: req.params.id } }
     );
 
-    if (!product) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
+
+    const product = await Product.findByPk(req.params.id);
 
     logger.warn(`Product suspended by admin: ${product.name}`);
 
@@ -662,8 +700,7 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
     const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
     const price_usdt = (price_NSL / nslToUsdt).toFixed(2);
 
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
+    const [affectedRows] = await Product.update(
       {
         name,
         price_NSL,
@@ -673,12 +710,14 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
         description,
         active: is_active
       },
-      { new: true }
+      { where: { id: req.params.id } }
     );
 
-    if (!product) {
+    if (affectedRows === 0) {
       return res.status(404).json({ message: 'Product not found' });
     }
+
+    const product = await Product.findByPk(req.params.id);
 
     logger.info(`Product updated by admin: ${product.name} - Price: ${price_NSL} NSL`);
 
@@ -698,7 +737,7 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
 router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']), adminLimiter, validateResetPassword, async (req, res) => {
   try {
     const { new_password } = req.body;
-    const user = await User.findById(req.params.id);
+    const user = await User.findByPk(req.params.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -708,7 +747,7 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     }
 
-    // Update password (will be hashed by pre-save hook)
+    // Update password (will be hashed by beforeUpdate hook if configured)
     user.password_hash = new_password;
     await user.save();
 
@@ -717,7 +756,7 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
     res.json({
       message: 'Password reset successfully',
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         phone: user.phone
       }

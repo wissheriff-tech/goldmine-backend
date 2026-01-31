@@ -1,42 +1,57 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const referralSchema = new mongoose.Schema({
+const Referral = sequelize.define('Referral', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   referrer_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   referred_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
+    type: DataTypes.INTEGER,
+    allowNull: false
   },
   bonus_NSL: {
-    type: Number,
-    default: 0,
-    min: 0
+    type: DataTypes.DECIMAL(18, 4),
+    defaultValue: 0,
+    get() {
+      const val = this.getDataValue('bonus_NSL');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   recharge_amount_NSL: {
-    type: Number,
-    default: 0
+    type: DataTypes.DECIMAL(18, 4),
+    defaultValue: 0,
+    get() {
+      const val = this.getDataValue('recharge_amount_NSL');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
   bonus_percentage: {
-    type: Number,
-    default: 35
+    type: DataTypes.DECIMAL(5, 2),
+    defaultValue: 35
   },
   status: {
-    type: String,
-    enum: ['pending', 'approved', 'paid'],
-    default: 'pending'
+    type: DataTypes.ENUM('pending', 'approved', 'paid'),
+    defaultValue: 'pending'
   },
   timestamp: {
-    type: Date,
-    default: Date.now
+    type: DataTypes.DATE,
+    defaultValue: DataTypes.NOW
   }
-}, { timestamps: true });
+}, {
+  tableName: 'referrals',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['referrer_id'] },
+    { fields: ['referred_id'] }
+  ]
+});
 
-// Index for fast lookups
-referralSchema.index({ referrer_id: 1 });
-referralSchema.index({ referred_id: 1 });
-
-module.exports = mongoose.model('Referral', referralSchema);
+module.exports = Referral;

@@ -1,89 +1,113 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const exchangeRateSchema = new mongoose.Schema({
+const ExchangeRate = sequelize.define('ExchangeRate', {
+  id: {
+    type: DataTypes.INTEGER,
+    primaryKey: true,
+    autoIncrement: true
+  },
   currency_code: {
-    type: String,
-    required: true,
+    type: DataTypes.STRING(10),
+    allowNull: false,
     unique: true,
-    uppercase: true,
-    trim: true
+    set(val) {
+      this.setDataValue('currency_code', val ? val.toUpperCase().trim() : val);
+    }
   },
   currency_name: {
-    type: String,
-    required: true
+    type: DataTypes.STRING,
+    allowNull: false
   },
   currency_symbol: {
-    type: String,
-    default: '$'
+    type: DataTypes.STRING(10),
+    defaultValue: '$'
   },
-  // Rate: How much of this currency = 1 USD
-  // Example: NGN = 1650 means 1 USD = 1650 NGN
   rate_to_usd: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: false,
+    get() {
+      const val = this.getDataValue('rate_to_usd');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
-  // Rate: How much USD = 1 unit of this currency
-  // Example: USD = 1, NGN = 0.000606 (1/1650)
   usd_per_unit: {
-    type: Number,
-    required: true,
-    min: 0
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: false,
+    get() {
+      const val = this.getDataValue('usd_per_unit');
+      return val === null ? 0 : parseFloat(val);
+    }
   },
-  // Binance live rate (automatic)
   binance_rate: {
-    type: Number,
-    default: null
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: true,
+    defaultValue: null,
+    get() {
+      const val = this.getDataValue('binance_rate');
+      return val === null ? null : parseFloat(val);
+    }
   },
-  // Admin override rate (manual)
   admin_override_rate: {
-    type: Number,
-    default: null
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: true,
+    defaultValue: null,
+    get() {
+      const val = this.getDataValue('admin_override_rate');
+      return val === null ? null : parseFloat(val);
+    }
   },
-  // Which rate to use: 'binance' or 'admin'
   active_rate_source: {
-    type: String,
-    enum: ['binance', 'admin'],
-    default: 'binance'
+    type: DataTypes.ENUM('binance', 'admin'),
+    defaultValue: 'binance'
   },
-  // Admin who set the override
   override_set_by: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    default: null
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    defaultValue: null
   },
   override_reason: {
-    type: String,
-    default: null
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
   },
   override_set_at: {
-    type: Date,
-    default: null
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
   },
-  // Last time Binance rate was fetched
   last_binance_update: {
-    type: Date,
-    default: null
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
   },
-  // Status
   enabled: {
-    type: Boolean,
-    default: true
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
   },
-  // Country/Region
   country: {
-    type: String,
-    default: null
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null
   },
-  // Notes
   notes: {
-    type: String,
-    default: null
+    type: DataTypes.TEXT,
+    allowNull: true,
+    defaultValue: null
   }
-}, { timestamps: true });
+}, {
+  tableName: 'exchange_rates',
+  timestamps: true,
+  createdAt: 'created_at',
+  updatedAt: 'updated_at',
+  indexes: [
+    { fields: ['currency_code'] },
+    { fields: ['enabled'] }
+  ]
+});
 
-// Method to get the active rate
-exchangeRateSchema.methods.getActiveRate = function() {
+// Instance methods
+ExchangeRate.prototype.getActiveRate = function () {
   if (this.active_rate_source === 'admin' && this.admin_override_rate) {
     return {
       rate: this.admin_override_rate,
@@ -98,38 +122,33 @@ exchangeRateSchema.methods.getActiveRate = function() {
   };
 };
 
-// Method to convert from USD to local currency
-exchangeRateSchema.methods.fromUSD = function(usdAmount) {
+ExchangeRate.prototype.fromUSD = function (usdAmount) {
   const activeRate = this.getActiveRate();
   return usdAmount * activeRate.rate;
 };
 
-// Method to convert from local currency to USD
-exchangeRateSchema.methods.toUSD = function(localAmount) {
+ExchangeRate.prototype.toUSD = function (localAmount) {
   const activeRate = this.getActiveRate();
   return localAmount * activeRate.usd_per_unit;
 };
 
-// Static method to convert between any two currencies
-exchangeRateSchema.statics.convert = async function(amount, fromCurrency, toCurrency) {
-  if (fromCurrency === toCurrency) {
-    return amount;
-  }
+// Static method to convert between currencies
+ExchangeRate.convert = async function (amount, fromCurrency, toCurrency) {
+  if (fromCurrency === toCurrency) return amount;
 
-  const from = await this.findOne({ currency_code: fromCurrency.toUpperCase(), enabled: true });
-  const to = await this.findOne({ currency_code: toCurrency.toUpperCase(), enabled: true });
+  const from = await ExchangeRate.findOne({
+    where: { currency_code: fromCurrency.toUpperCase(), enabled: true }
+  });
+  const to = await ExchangeRate.findOne({
+    where: { currency_code: toCurrency.toUpperCase(), enabled: true }
+  });
 
   if (!from || !to) {
     throw new Error(`Currency not found or disabled: ${!from ? fromCurrency : toCurrency}`);
   }
 
-  // Convert to USD first, then to target currency
   const usdAmount = from.toUSD(amount);
   return to.fromUSD(usdAmount);
 };
 
-// Index for fast lookups
-exchangeRateSchema.index({ currency_code: 1 });
-exchangeRateSchema.index({ enabled: 1 });
-
-module.exports = mongoose.model('ExchangeRate', exchangeRateSchema);
+module.exports = ExchangeRate;

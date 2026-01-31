@@ -1,8 +1,6 @@
 const express = require('express');
-const User = require('../models/User');
-const Transaction = require('../models/Transaction');
-const Product = require('../models/Product');
-const Referral = require('../models/Referral');
+const { User, Transaction, Product, Referral, UserProduct } = require('../models');
+const { Op, fn, col, literal } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -12,11 +10,17 @@ const router = express.Router();
 router.get('/user/dashboard', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await User.findById(userId).populate('products.product_id');
+    const user = await User.findByPk(userId);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+
+    // Get user products with product details
+    const userProducts = await UserProduct.findAll({
+      where: { user_id: userId },
+      include: [{ model: Product, as: 'product' }]
+    });
 
     // Get date ranges
     const now = new Date();
@@ -25,128 +29,94 @@ router.get('/user/dashboard', authenticate, async (req, res) => {
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
     // Transaction stats
-    const totalTransactions = await Transaction.countDocuments({ user_id: userId });
-    const pendingTransactions = await Transaction.countDocuments({ user_id: userId, status: 'pending' });
-    const approvedTransactions = await Transaction.countDocuments({ user_id: userId, status: 'approved' });
+    const totalTransactions = await Transaction.count({ where: { user_id: userId } });
+    const pendingTransactions = await Transaction.count({ where: { user_id: userId, status: 'pending' } });
+    const approvedTransactions = await Transaction.count({ where: { user_id: userId, status: 'approved' } });
 
     // Income stats
-    const totalIncome = await Transaction.aggregate([
-      {
-        $match: {
-          user_id: user._id,
-          type: 'income',
-          status: 'approved'
-        }
+    const totalIncome = await Transaction.findAll({
+      where: {
+        user_id: userId,
+        type: 'income',
+        status: 'approved'
       },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount_NSL' }
-        }
-      }
-    ]);
+      attributes: [[fn('SUM', col('amount_NSL')), 'total']],
+      raw: true
+    });
 
-    const last7DaysIncome = await Transaction.aggregate([
-      {
-        $match: {
-          user_id: user._id,
-          type: 'income',
-          status: 'approved',
-          timestamp: { $gte: last7Days }
-        }
+    const last7DaysIncome = await Transaction.findAll({
+      where: {
+        user_id: userId,
+        type: 'income',
+        status: 'approved',
+        timestamp: { [Op.gte]: last7Days }
       },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount_NSL' }
-        }
-      }
-    ]);
+      attributes: [[fn('SUM', col('amount_NSL')), 'total']],
+      raw: true
+    });
 
-    const thisMonthIncome = await Transaction.aggregate([
-      {
-        $match: {
-          user_id: user._id,
-          type: 'income',
-          status: 'approved',
-          timestamp: { $gte: thisMonth }
-        }
+    const thisMonthIncome = await Transaction.findAll({
+      where: {
+        user_id: userId,
+        type: 'income',
+        status: 'approved',
+        timestamp: { [Op.gte]: thisMonth }
       },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$amount_NSL' }
-        }
-      }
-    ]);
+      attributes: [[fn('SUM', col('amount_NSL')), 'total']],
+      raw: true
+    });
 
     // Referral stats
-    const totalReferrals = await Referral.countDocuments({ referrer_id: userId });
-    const referralEarnings = await Referral.aggregate([
-      {
-        $match: {
-          referrer_id: user._id,
-          status: 'paid'
-        }
+    const totalReferrals = await Referral.count({ where: { referrer_id: userId } });
+    const referralEarnings = await Referral.findAll({
+      where: {
+        referrer_id: userId,
+        status: 'paid'
       },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$bonus_NSL' }
-        }
-      }
-    ]);
+      attributes: [[fn('SUM', col('bonus_NSL')), 'total']],
+      raw: true
+    });
 
     // Product stats
-    const activeProducts = user.products.filter(p => p.is_active);
+    const activeProducts = userProducts.filter(p => p.is_active);
     const totalDailyIncome = activeProducts.reduce((sum, p) => {
-      const prod = p.product_id;
+      const prod = p.product;
       return sum + (prod?.daily_income_NSL || 0);
     }, 0);
 
     // Transaction history chart data (last 30 days)
-    const transactionHistory = await Transaction.aggregate([
-      {
-        $match: {
-          user_id: user._id,
-          timestamp: { $gte: last30Days }
-        }
+    const transactionHistory = await Transaction.findAll({
+      where: {
+        user_id: userId,
+        timestamp: { [Op.gte]: last30Days }
       },
-      {
-        $group: {
-          _id: {
-            date: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
-            type: '$type'
-          },
-          count: { $sum: 1 },
-          amount: { $sum: '$amount_NSL' }
-        }
-      },
-      {
-        $sort: { '_id.date': 1 }
-      }
-    ]);
+      attributes: [
+        [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'date'],
+        'type',
+        [fn('COUNT', col('id')), 'count'],
+        [fn('SUM', col('amount_NSL')), 'amount']
+      ],
+      group: [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'type'],
+      order: [[fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'ASC']],
+      raw: true
+    });
 
     // Income trend (daily for last 7 days)
-    const incomeTrend = await Transaction.aggregate([
-      {
-        $match: {
-          user_id: user._id,
-          type: 'income',
-          status: 'approved',
-          timestamp: { $gte: last7Days }
-        }
+    const incomeTrend = await Transaction.findAll({
+      where: {
+        user_id: userId,
+        type: 'income',
+        status: 'approved',
+        timestamp: { [Op.gte]: last7Days }
       },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
-          total: { $sum: '$amount_NSL' }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      }
-    ]);
+      attributes: [
+        [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'date'],
+        [fn('SUM', col('amount_NSL')), 'total']
+      ],
+      group: [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d')],
+      order: [[fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'ASC']],
+      raw: true
+    });
 
     res.json({
       balance: {
@@ -159,22 +129,29 @@ router.get('/user/dashboard', authenticate, async (req, res) => {
         approved: approvedTransactions
       },
       income: {
-        total: totalIncome[0]?.total || 0,
-        last_7_days: last7DaysIncome[0]?.total || 0,
-        this_month: thisMonthIncome[0]?.total || 0,
+        total: parseFloat(totalIncome[0]?.total) || 0,
+        last_7_days: parseFloat(last7DaysIncome[0]?.total) || 0,
+        this_month: parseFloat(thisMonthIncome[0]?.total) || 0,
         daily_potential: totalDailyIncome
       },
       referrals: {
         total_count: totalReferrals,
-        total_earnings: referralEarnings[0]?.total || 0
+        total_earnings: parseFloat(referralEarnings[0]?.total) || 0
       },
       products: {
         active_count: activeProducts.length,
-        total_count: user.products.length
+        total_count: userProducts.length
       },
       charts: {
-        transaction_history: transactionHistory,
-        income_trend: incomeTrend
+        transaction_history: transactionHistory.map(t => ({
+          _id: { date: t.date, type: t.type },
+          count: parseInt(t.count),
+          amount: parseFloat(t.amount) || 0
+        })),
+        income_trend: incomeTrend.map(t => ({
+          _id: t.date,
+          total: parseFloat(t.total) || 0
+        }))
       },
       vip_level: user.vip_level
     });
@@ -195,209 +172,161 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
     const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
     // User stats
-    const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ status: 'active' });
-    const pendingUsers = await User.countDocuments({ status: 'pending' });
-    const frozenUsers = await User.countDocuments({ status: 'frozen' });
-    const newUsersToday = await User.countDocuments({ created_at: { $gte: today } });
-    const newUsersThisMonth = await User.countDocuments({ created_at: { $gte: thisMonth } });
+    const totalUsers = await User.count();
+    const activeUsers = await User.count({ where: { status: 'active' } });
+    const pendingUsers = await User.count({ where: { status: 'pending' } });
+    const frozenUsers = await User.count({ where: { status: 'frozen' } });
+    const newUsersToday = await User.count({ where: { created_at: { [Op.gte]: today } } });
+    const newUsersThisMonth = await User.count({ where: { created_at: { [Op.gte]: thisMonth } } });
 
     // VIP distribution
-    const vipDistribution = await User.aggregate([
-      {
-        $group: {
-          _id: '$vip_level',
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      }
-    ]);
+    const vipDistribution = await User.findAll({
+      attributes: [
+        'vip_level',
+        [fn('COUNT', col('id')), 'count']
+      ],
+      group: ['vip_level'],
+      order: [['vip_level', 'ASC']],
+      raw: true
+    });
 
     // Transaction stats
-    const totalTransactions = await Transaction.countDocuments();
-    const pendingTransactions = await Transaction.countDocuments({ status: 'pending' });
-    const approvedTransactions = await Transaction.countDocuments({ status: 'approved' });
-    const rejectedTransactions = await Transaction.countDocuments({ status: 'rejected' });
+    const totalTransactions = await Transaction.count();
+    const pendingTransactions = await Transaction.count({ where: { status: 'pending' } });
+    const approvedTransactions = await Transaction.count({ where: { status: 'approved' } });
+    const rejectedTransactions = await Transaction.count({ where: { status: 'rejected' } });
 
     // Transaction volume by type
-    const transactionsByType = await Transaction.aggregate([
-      {
-        $group: {
-          _id: '$type',
-          count: { $sum: 1 },
-          total_NSL: { $sum: '$amount_NSL' },
-          total_USDT: { $sum: '$amount_usdt' }
-        }
-      }
-    ]);
+    const transactionsByType = await Transaction.findAll({
+      attributes: [
+        'type',
+        [fn('COUNT', col('id')), 'count'],
+        [fn('SUM', col('amount_NSL')), 'total_NSL'],
+        [fn('SUM', col('amount_usdt')), 'total_USDT']
+      ],
+      group: ['type'],
+      raw: true
+    });
 
     // Revenue stats (approved recharges)
-    const totalRevenue = await Transaction.aggregate([
-      {
-        $match: {
-          type: 'recharge',
-          status: 'approved'
-        }
+    const totalRevenue = await Transaction.findAll({
+      where: {
+        type: 'recharge',
+        status: 'approved'
       },
-      {
-        $group: {
-          _id: null,
-          total_NSL: { $sum: '$amount_NSL' },
-          total_USDT: { $sum: '$amount_usdt' }
-        }
-      }
-    ]);
+      attributes: [
+        [fn('SUM', col('amount_NSL')), 'total_NSL'],
+        [fn('SUM', col('amount_usdt')), 'total_USDT']
+      ],
+      raw: true
+    });
 
-    const thisMonthRevenue = await Transaction.aggregate([
-      {
-        $match: {
-          type: 'recharge',
-          status: 'approved',
-          timestamp: { $gte: thisMonth }
-        }
+    const thisMonthRevenue = await Transaction.findAll({
+      where: {
+        type: 'recharge',
+        status: 'approved',
+        timestamp: { [Op.gte]: thisMonth }
       },
-      {
-        $group: {
-          _id: null,
-          total_NSL: { $sum: '$amount_NSL' },
-          total_USDT: { $sum: '$amount_usdt' }
-        }
-      }
-    ]);
+      attributes: [
+        [fn('SUM', col('amount_NSL')), 'total_NSL'],
+        [fn('SUM', col('amount_usdt')), 'total_USDT']
+      ],
+      raw: true
+    });
 
-    const lastMonthRevenue = await Transaction.aggregate([
-      {
-        $match: {
-          type: 'recharge',
-          status: 'approved',
-          timestamp: { $gte: lastMonth, $lt: thisMonth }
-        }
+    const lastMonthRevenue = await Transaction.findAll({
+      where: {
+        type: 'recharge',
+        status: 'approved',
+        timestamp: { [Op.gte]: lastMonth, [Op.lt]: thisMonth }
       },
-      {
-        $group: {
-          _id: null,
-          total_NSL: { $sum: '$amount_NSL' },
-          total_USDT: { $sum: '$amount_usdt' }
-        }
-      }
-    ]);
+      attributes: [
+        [fn('SUM', col('amount_NSL')), 'total_NSL'],
+        [fn('SUM', col('amount_usdt')), 'total_USDT']
+      ],
+      raw: true
+    });
 
     // Withdrawal stats
-    const pendingWithdrawals = await Transaction.aggregate([
-      {
-        $match: {
-          type: 'withdrawal',
-          status: 'pending'
-        }
+    const pendingWithdrawals = await Transaction.findAll({
+      where: {
+        type: 'withdrawal',
+        status: 'pending'
       },
-      {
-        $group: {
-          _id: null,
-          count: { $sum: 1 },
-          total_NSL: { $sum: '$amount_NSL' },
-          total_USDT: { $sum: '$amount_usdt' }
-        }
-      }
-    ]);
+      attributes: [
+        [fn('COUNT', col('id')), 'count'],
+        [fn('SUM', col('amount_NSL')), 'total_NSL'],
+        [fn('SUM', col('amount_usdt')), 'total_USDT']
+      ],
+      raw: true
+    });
 
     // Product stats
-    const productSales = await Transaction.aggregate([
-      {
-        $match: {
-          type: 'purchase',
-          status: 'approved'
-        }
+    const productSales = await Transaction.findAll({
+      where: {
+        type: 'purchase',
+        status: 'approved'
       },
-      {
-        $group: {
-          _id: '$product_id',
-          count: { $sum: 1 },
-          revenue: { $sum: '$amount_NSL' }
-        }
-      },
-      {
-        $lookup: {
-          from: 'products',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'product'
-        }
-      },
-      {
-        $unwind: '$product'
-      },
-      {
-        $project: {
-          product_name: '$product.name',
-          sales_count: '$count',
-          revenue: '$revenue'
-        }
-      },
-      {
-        $sort: { sales_count: -1 }
-      }
-    ]);
+      attributes: [
+        'product_id',
+        [fn('COUNT', col('Transaction.id')), 'sales_count'],
+        [fn('SUM', col('amount_NSL')), 'revenue']
+      ],
+      include: [{
+        model: Product,
+        as: 'product',
+        attributes: ['name']
+      }],
+      group: ['product_id', 'product.id', 'product.name'],
+      order: [[fn('COUNT', col('Transaction.id')), 'DESC']],
+      raw: true,
+      nest: true
+    });
 
     // User growth chart (last 30 days)
-    const userGrowth = await User.aggregate([
-      {
-        $match: {
-          created_at: { $gte: last30Days }
-        }
+    const userGrowth = await User.findAll({
+      where: {
+        created_at: { [Op.gte]: last30Days }
       },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } },
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      }
-    ]);
+      attributes: [
+        [fn('DATE_FORMAT', col('created_at'), '%Y-%m-%d'), 'date'],
+        [fn('COUNT', col('id')), 'count']
+      ],
+      group: [fn('DATE_FORMAT', col('created_at'), '%Y-%m-%d')],
+      order: [[fn('DATE_FORMAT', col('created_at'), '%Y-%m-%d'), 'ASC']],
+      raw: true
+    });
 
     // Revenue trend (last 30 days)
-    const revenueTrend = await Transaction.aggregate([
-      {
-        $match: {
-          type: 'recharge',
-          status: 'approved',
-          timestamp: { $gte: last30Days }
-        }
+    const revenueTrend = await Transaction.findAll({
+      where: {
+        type: 'recharge',
+        status: 'approved',
+        timestamp: { [Op.gte]: last30Days }
       },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$timestamp' } },
-          NSL: { $sum: '$amount_NSL' },
-          USDT: { $sum: '$amount_usdt' }
-        }
-      },
-      {
-        $sort: { _id: 1 }
-      }
-    ]);
+      attributes: [
+        [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'date'],
+        [fn('SUM', col('amount_NSL')), 'NSL'],
+        [fn('SUM', col('amount_usdt')), 'USDT']
+      ],
+      group: [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d')],
+      order: [[fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'ASC']],
+      raw: true
+    });
 
     // Referral stats
-    const totalReferrals = await Referral.countDocuments();
-    const totalReferralPayouts = await Referral.aggregate([
-      {
-        $match: {
-          status: 'paid'
-        }
+    const totalReferrals = await Referral.count();
+    const totalReferralPayouts = await Referral.findAll({
+      where: {
+        status: 'paid'
       },
-      {
-        $group: {
-          _id: null,
-          total: { $sum: '$bonus_NSL' }
-        }
-      }
-    ]);
+      attributes: [[fn('SUM', col('bonus_NSL')), 'total']],
+      raw: true
+    });
 
     // Calculate growth rates
-    const thisMonthRev = thisMonthRevenue[0]?.total_NSL || 0;
-    const lastMonthRev = lastMonthRevenue[0]?.total_NSL || 0;
+    const thisMonthRev = parseFloat(thisMonthRevenue[0]?.total_NSL) || 0;
+    const lastMonthRev = parseFloat(lastMonthRevenue[0]?.total_NSL) || 0;
     const revenueGrowth = lastMonthRev > 0 ? ((thisMonthRev - lastMonthRev) / lastMonthRev * 100).toFixed(2) : 0;
 
     res.json({
@@ -408,34 +337,66 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
         frozen: frozenUsers,
         new_today: newUsersToday,
         new_this_month: newUsersThisMonth,
-        vip_distribution: vipDistribution
+        vip_distribution: vipDistribution.map(v => ({
+          _id: v.vip_level,
+          count: parseInt(v.count)
+        }))
       },
       transactions: {
         total: totalTransactions,
         pending: pendingTransactions,
         approved: approvedTransactions,
         rejected: rejectedTransactions,
-        by_type: transactionsByType
+        by_type: transactionsByType.map(t => ({
+          _id: t.type,
+          count: parseInt(t.count),
+          total_NSL: parseFloat(t.total_NSL) || 0,
+          total_USDT: parseFloat(t.total_USDT) || 0
+        }))
       },
       revenue: {
-        total: totalRevenue[0] || { total_NSL: 0, total_USDT: 0 },
-        this_month: thisMonthRevenue[0] || { total_NSL: 0, total_USDT: 0 },
-        last_month: lastMonthRevenue[0] || { total_NSL: 0, total_USDT: 0 },
+        total: {
+          total_NSL: parseFloat(totalRevenue[0]?.total_NSL) || 0,
+          total_USDT: parseFloat(totalRevenue[0]?.total_USDT) || 0
+        },
+        this_month: {
+          total_NSL: thisMonthRev,
+          total_USDT: parseFloat(thisMonthRevenue[0]?.total_USDT) || 0
+        },
+        last_month: {
+          total_NSL: lastMonthRev,
+          total_USDT: parseFloat(lastMonthRevenue[0]?.total_USDT) || 0
+        },
         growth_rate: `${revenueGrowth}%`
       },
       withdrawals: {
-        pending: pendingWithdrawals[0] || { count: 0, total_NSL: 0, total_USDT: 0 }
+        pending: {
+          count: parseInt(pendingWithdrawals[0]?.count) || 0,
+          total_NSL: parseFloat(pendingWithdrawals[0]?.total_NSL) || 0,
+          total_USDT: parseFloat(pendingWithdrawals[0]?.total_USDT) || 0
+        }
       },
       products: {
-        sales: productSales
+        sales: productSales.map(p => ({
+          product_name: p.product?.name || 'Unknown',
+          sales_count: parseInt(p.sales_count),
+          revenue: parseFloat(p.revenue) || 0
+        }))
       },
       referrals: {
         total_count: totalReferrals,
-        total_payouts: totalReferralPayouts[0]?.total || 0
+        total_payouts: parseFloat(totalReferralPayouts[0]?.total) || 0
       },
       charts: {
-        user_growth: userGrowth,
-        revenue_trend: revenueTrend
+        user_growth: userGrowth.map(u => ({
+          _id: u.date,
+          count: parseInt(u.count)
+        })),
+        revenue_trend: revenueTrend.map(r => ({
+          _id: r.date,
+          NSL: parseFloat(r.NSL) || 0,
+          USDT: parseFloat(r.USDT) || 0
+        }))
       }
     });
   } catch (error) {
@@ -452,65 +413,92 @@ router.get('/finance/dashboard', authenticate, authorize(['superadmin', 'finance
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 
     // Pending transactions by type
-    const pendingByType = await Transaction.aggregate([
-      {
-        $match: {
-          status: 'pending'
-        }
+    const pendingByType = await Transaction.findAll({
+      where: {
+        status: 'pending'
       },
-      {
-        $group: {
-          _id: '$type',
-          count: { $sum: 1 },
-          total_NSL: { $sum: '$amount_NSL' },
-          total_USDT: { $sum: '$amount_usdt' }
-        }
-      }
-    ]);
+      attributes: [
+        'type',
+        [fn('COUNT', col('id')), 'count'],
+        [fn('SUM', col('amount_NSL')), 'total_NSL'],
+        [fn('SUM', col('amount_usdt')), 'total_USDT']
+      ],
+      group: ['type'],
+      raw: true
+    });
 
     // Today's processed transactions
-    const todayProcessed = await Transaction.countDocuments({
-      status: { $in: ['approved', 'rejected'] },
-      completed_at: { $gte: today }
+    const todayProcessed = await Transaction.count({
+      where: {
+        status: { [Op.in]: ['approved', 'rejected'] },
+        completed_at: { [Op.gte]: today }
+      }
     });
 
     // This month's processed transactions
-    const thisMonthProcessed = await Transaction.countDocuments({
-      status: { $in: ['approved', 'rejected'] },
-      completed_at: { $gte: thisMonth }
+    const thisMonthProcessed = await Transaction.count({
+      where: {
+        status: { [Op.in]: ['approved', 'rejected'] },
+        completed_at: { [Op.gte]: thisMonth }
+      }
     });
 
     // Pending recharges (high priority)
-    const pendingRecharges = await Transaction.find({
-      type: 'recharge',
-      status: 'pending'
-    })
-      .populate('user_id', 'phone username')
-      .sort({ timestamp: 1 })
-      .limit(10);
+    const pendingRecharges = await Transaction.findAll({
+      where: {
+        type: 'recharge',
+        status: 'pending'
+      },
+      include: [{
+        model: User,
+        as: 'user',
+        attributes: ['phone', 'username']
+      }],
+      order: [['timestamp', 'ASC']],
+      limit: 10
+    });
 
     // Pending withdrawals (high priority)
-    const pendingWithdrawals = await Transaction.find({
-      type: 'withdrawal',
-      status: 'pending'
-    })
-      .populate('user_id', 'phone username balance_NSL')
-      .sort({ timestamp: 1 })
-      .limit(10);
+    const pendingWithdrawals = await Transaction.findAll({
+      where: {
+        type: 'withdrawal',
+        status: 'pending'
+      },
+      include: [{
+        model: User,
+        as: 'user',
+        attributes: ['phone', 'username', 'balance_NSL']
+      }],
+      order: [['timestamp', 'ASC']],
+      limit: 10
+    });
 
     // Recent activity
-    const recentActivity = await Transaction.find({
-      status: { $in: ['approved', 'rejected'] },
-      approved_by: req.user.id
-    })
-      .populate('user_id', 'phone username')
-      .sort({ completed_at: -1 })
-      .limit(20);
+    const recentActivity = await Transaction.findAll({
+      where: {
+        status: { [Op.in]: ['approved', 'rejected'] },
+        approved_by: req.user.id
+      },
+      include: [{
+        model: User,
+        as: 'user',
+        attributes: ['phone', 'username']
+      }],
+      order: [['completed_at', 'DESC']],
+      limit: 20
+    });
+
+    const formattedPendingByType = pendingByType.map(p => ({
+      _id: p.type,
+      count: parseInt(p.count),
+      total_NSL: parseFloat(p.total_NSL) || 0,
+      total_USDT: parseFloat(p.total_USDT) || 0
+    }));
 
     res.json({
       pending: {
-        by_type: pendingByType,
-        total_count: pendingByType.reduce((sum, item) => sum + item.count, 0)
+        by_type: formattedPendingByType,
+        total_count: formattedPendingByType.reduce((sum, item) => sum + item.count, 0)
       },
       processed: {
         today: todayProcessed,

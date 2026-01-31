@@ -1,8 +1,5 @@
 const express = require('express');
-const Product = require('../models/Product');
-const User = require('../models/User');
-const Transaction = require('../models/Transaction');
-const Referral = require('../models/Referral');
+const { User, Product, UserProduct, Transaction, Referral } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
@@ -16,9 +13,9 @@ const {
 } = require('../middleware/validation');
 
 // Security Middleware
-const { 
-  transactionLimiter, 
-  adminLimiter 
+const {
+  transactionLimiter,
+  adminLimiter
 } = require('../middleware/security');
 
 const router = express.Router();
@@ -26,7 +23,7 @@ const router = express.Router();
 // Get all products
 router.get('/', async (req, res) => {
   try {
-    const products = await Product.find({ active: true });
+    const products = await Product.findAll({ where: { active: true } });
     res.json(products);
   } catch (error) {
     logger.error('Products fetch error:', error);
@@ -39,8 +36,8 @@ router.get('/', async (req, res) => {
 router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async (req, res) => {
   try {
     const { product_id } = req.body;
-    const user = await User.findById(req.user.id).populate('products.product_id');
-    const product = await Product.findById(product_id);
+    const user = await User.findByPk(req.user.id);
+    const product = await Product.findByPk(product_id);
 
     if (!user || !product) {
       return res.status(404).json({ message: 'User or product not found' });
@@ -57,9 +54,13 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
     }
 
     // Check if user already owns this product and it's still active
-    const existingProduct = user.products.find(
-      p => p.product_id && p.product_id._id.toString() === product_id && p.is_active
-    );
+    const existingProduct = await UserProduct.findOne({
+      where: {
+        user_id: req.user.id,
+        product_id: product_id,
+        is_active: true
+      }
+    });
 
     if (existingProduct) {
       return res.status(400).json({
@@ -75,9 +76,10 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
     // Deduct balance
     user.balance_NSL -= product.price_NSL;
 
-    // Add product to user's products array with tracking info
-    user.products.push({
-      product_id: product._id,
+    // Add product to UserProduct table
+    await UserProduct.create({
+      user_id: user.id,
+      product_id: product.id,
       purchase_date: purchaseDate,
       expires_at: expiresAt,
       auto_renew: true,
@@ -85,15 +87,18 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
     });
 
     // Update VIP level to highest owned product
-    const activeProducts = user.products.filter(p => p.is_active);
+    const activeUserProducts = await UserProduct.findAll({
+      where: { user_id: user.id, is_active: true },
+      include: [{ model: Product, as: 'product', attributes: ['name'] }]
+    });
+
     const vipLevels = ['VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'];
     let highestVip = 'none';
 
-    for (const userProduct of activeProducts) {
-      const prod = userProduct.product_id;
-      // Handle case where product might not be populated correctly
+    for (const userProduct of activeUserProducts) {
+      const prod = userProduct.product;
       if (prod) {
-        const prodName = prod.name || prod;
+        const prodName = prod.name;
         if (vipLevels.indexOf(prodName) > vipLevels.indexOf(highestVip)) {
           highestVip = prodName;
         }
@@ -104,27 +109,28 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
     await user.save();
 
     // Create transaction with product reference
-    const transaction = new Transaction({
-      user_id: user._id,
+    const transaction = await Transaction.create({
+      user_id: user.id,
       type: 'purchase',
       amount_NSL: product.price_NSL,
       amount_usdt: product.price_usdt,
-      product_id: product._id,
+      product_id: product.id,
       status: 'approved',
       notes: `Purchased ${product.name} - Valid until ${expiresAt.toLocaleDateString()}`
     });
-    await transaction.save();
 
     // Handle referral bonus (ONLY on first purchase)
     if (user.referred_by) {
-      const referrer = await User.findOne({ referral_code: user.referred_by });
+      const referrer = await User.findOne({ where: { referral_code: user.referred_by } });
 
       if (referrer) {
         // Check if referral bonus has already been paid for this user
         const existingBonus = await Referral.findOne({
-          referrer_id: referrer._id,
-          referred_id: user._id,
-          status: 'paid'
+          where: {
+            referrer_id: referrer.id,
+            referred_id: user.id,
+            status: 'paid'
+          }
         });
 
         // Only pay bonus if this is the first purchase (no existing bonus paid)
@@ -135,15 +141,14 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
           referrer.balance_NSL += bonusAmount;
           await referrer.save();
 
-          const referral = new Referral({
-            referrer_id: referrer._id,
-            referred_id: user._id,
+          const referral = await Referral.create({
+            referrer_id: referrer.id,
+            referred_id: user.id,
             bonus_NSL: bonusAmount,
             recharge_amount_NSL: product.price_NSL,
             bonus_percentage: bonusPercentage,
             status: 'paid'
           });
-          await referral.save();
 
           logger.info(`Referral bonus: ${referrer.phone} earned ${bonusAmount} NSL from ${user.phone}'s first purchase`);
 
@@ -160,7 +165,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
           // Send in-app notification to referrer
           try {
             await notificationService.notifyReferralBonus(
-              referrer._id,
+              referrer.id,
               bonusAmount,
               user.username
             );
@@ -178,7 +183,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
     // Send in-app notification to buyer
     try {
       await notificationService.notifyProductPurchased(
-        user._id,
+        user.id,
         product.name,
         expiresAt
       );
@@ -213,12 +218,12 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
   try {
     const { name, price_NSL, price_usdt, daily_income_NSL, validity_days, description, benefits } = req.body;
 
-    const productExists = await Product.findOne({ name });
+    const productExists = await Product.findOne({ where: { name } });
     if (productExists) {
       return res.status(400).json({ message: 'Product already exists' });
     }
 
-    const product = new Product({
+    const product = await Product.create({
       name,
       price_NSL,
       price_usdt,
@@ -229,7 +234,6 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
       active: true
     });
 
-    await product.save();
     logger.info(`Product created: ${name}`);
 
     res.status(201).json({
@@ -247,11 +251,13 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
 router.patch('/:id', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateUpdateProduct, async (req, res) => {
   try {
     const { price_NSL, price_usdt, daily_income_NSL, active, description, benefits } = req.body;
-    const product = await Product.findByIdAndUpdate(
-      req.params.id,
+
+    await Product.update(
       { price_NSL, price_usdt, daily_income_NSL, active, description, benefits },
-      { new: true }
+      { where: { id: req.params.id } }
     );
+
+    const product = await Product.findByPk(req.params.id);
 
     if (!product) {
       return res.status(404).json({ message: 'Product not found' });

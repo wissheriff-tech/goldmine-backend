@@ -1,7 +1,6 @@
 const express = require('express');
-const Transaction = require('../models/Transaction');
-const User = require('../models/User');
-const Referral = require('../models/Referral');
+const { User, Transaction, Referral, Product } = require('../models');
+const { Op } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -36,36 +35,41 @@ router.get('/transactions/csv', authenticate, authorize(['superadmin', 'admin', 
       user_id
     } = req.query;
 
-    const filter = {};
-    if (type) filter.type = type;
-    if (status) filter.status = status;
-    if (user_id) filter.user_id = user_id;
+    const where = {};
+    if (type) where.type = type;
+    if (status) where.status = status;
+    if (user_id) where.user_id = user_id;
     if (start_date || end_date) {
-      filter.timestamp = {};
-      if (start_date) filter.timestamp.$gte = new Date(start_date);
-      if (end_date) filter.timestamp.$lte = new Date(end_date);
+      where.timestamp = {};
+      if (start_date) where.timestamp[Op.gte] = new Date(start_date);
+      if (end_date) where.timestamp[Op.lte] = new Date(end_date);
     }
 
-    const transactions = await Transaction.find(filter)
-      .populate('user_id', 'phone username email')
-      .populate('approved_by', 'phone username')
-      .populate('product_id', 'name')
-      .sort({ timestamp: -1 })
-      .lean();
+    const transactions = await Transaction.findAll({
+      where,
+      include: [
+        { model: User, as: 'user', attributes: ['phone', 'username', 'email'] },
+        { model: User, as: 'approver', attributes: ['phone', 'username'] },
+        { model: Product, as: 'product', attributes: ['name'] }
+      ],
+      order: [['timestamp', 'DESC']],
+      raw: true,
+      nest: true
+    });
 
     // Format data for CSV
     const formattedData = transactions.map(t => ({
-      Transaction_ID: t._id.toString(),
+      Transaction_ID: t.id.toString(),
       Date: new Date(t.timestamp).toISOString(),
       Type: t.type,
-      User_Phone: t.user_id?.phone || 'N/A',
-      User_Name: t.user_id?.username || 'N/A',
+      User_Phone: t.user?.phone || 'N/A',
+      User_Name: t.user?.username || 'N/A',
       Amount_NSL: t.amount_NSL,
       Amount_USDT: t.amount_usdt,
       Status: t.status,
       Payment_Method: t.payment_method || 'N/A',
       Withdrawal_Address: t.withdrawal_address || 'N/A',
-      Approved_By: t.approved_by?.phone || 'N/A',
+      Approved_By: t.approver?.phone || 'N/A',
       Notes: t.notes || '',
       Completed_At: t.completed_at ? new Date(t.completed_at).toISOString() : 'N/A'
     }));
@@ -104,22 +108,24 @@ router.get('/users/csv', authenticate, authorize(['superadmin', 'admin']), async
   try {
     const { status, vip_level, start_date, end_date } = req.query;
 
-    const filter = {};
-    if (status) filter.status = status;
-    if (vip_level) filter.vip_level = vip_level;
+    const where = {};
+    if (status) where.status = status;
+    if (vip_level) where.vip_level = vip_level;
     if (start_date || end_date) {
-      filter.created_at = {};
-      if (start_date) filter.created_at.$gte = new Date(start_date);
-      if (end_date) filter.created_at.$lte = new Date(end_date);
+      where.created_at = {};
+      if (start_date) where.created_at[Op.gte] = new Date(start_date);
+      if (end_date) where.created_at[Op.lte] = new Date(end_date);
     }
 
-    const users = await User.find(filter)
-      .select('-password_hash')
-      .sort({ created_at: -1 })
-      .lean();
+    const users = await User.findAll({
+      where,
+      attributes: { exclude: ['password_hash'] },
+      order: [['created_at', 'DESC']],
+      raw: true
+    });
 
     const formattedData = users.map(u => ({
-      User_ID: u._id.toString(),
+      User_ID: u.id.toString(),
       Username: u.username,
       Phone: u.phone,
       Email: u.email || 'N/A',
@@ -170,26 +176,31 @@ router.get('/referrals/csv', authenticate, authorize(['superadmin', 'admin']), a
   try {
     const { status, start_date, end_date } = req.query;
 
-    const filter = {};
-    if (status) filter.status = status;
+    const where = {};
+    if (status) where.status = status;
     if (start_date || end_date) {
-      filter.timestamp = {};
-      if (start_date) filter.timestamp.$gte = new Date(start_date);
-      if (end_date) filter.timestamp.$lte = new Date(end_date);
+      where.timestamp = {};
+      if (start_date) where.timestamp[Op.gte] = new Date(start_date);
+      if (end_date) where.timestamp[Op.lte] = new Date(end_date);
     }
 
-    const referrals = await Referral.find(filter)
-      .populate('referrer_id', 'phone username')
-      .populate('referred_id', 'phone username')
-      .sort({ timestamp: -1 })
-      .lean();
+    const referrals = await Referral.findAll({
+      where,
+      include: [
+        { model: User, as: 'referrer', attributes: ['phone', 'username'] },
+        { model: User, as: 'referred', attributes: ['phone', 'username'] }
+      ],
+      order: [['timestamp', 'DESC']],
+      raw: true,
+      nest: true
+    });
 
     const formattedData = referrals.map(r => ({
-      Referral_ID: r._id.toString(),
-      Referrer_Phone: r.referrer_id?.phone || 'N/A',
-      Referrer_Name: r.referrer_id?.username || 'N/A',
-      Referred_Phone: r.referred_id?.phone || 'N/A',
-      Referred_Name: r.referred_id?.username || 'N/A',
+      Referral_ID: r.id.toString(),
+      Referrer_Phone: r.referrer?.phone || 'N/A',
+      Referrer_Name: r.referrer?.username || 'N/A',
+      Referred_Phone: r.referred?.phone || 'N/A',
+      Referred_Name: r.referred?.username || 'N/A',
       Bonus_NSL: r.bonus_NSL,
       Recharge_Amount_NSL: r.recharge_amount_NSL,
       Bonus_Percentage: r.bonus_percentage,
@@ -226,19 +237,24 @@ router.get('/referrals/csv', authenticate, authorize(['superadmin', 'admin']), a
 // Export user's own transactions
 router.get('/my-transactions/csv', authenticate, async (req, res) => {
   try {
-    const transactions = await Transaction.find({ user_id: req.user.id })
-      .populate('product_id', 'name')
-      .sort({ timestamp: -1 })
-      .lean();
+    const transactions = await Transaction.findAll({
+      where: { user_id: req.user.id },
+      include: [
+        { model: Product, as: 'product', attributes: ['name'] }
+      ],
+      order: [['timestamp', 'DESC']],
+      raw: true,
+      nest: true
+    });
 
     const formattedData = transactions.map(t => ({
-      Transaction_ID: t._id.toString(),
+      Transaction_ID: t.id.toString(),
       Date: new Date(t.timestamp).toISOString(),
       Type: t.type,
       Amount_NSL: t.amount_NSL,
       Amount_USDT: t.amount_usdt,
       Status: t.status,
-      Product: t.product_id?.name || 'N/A',
+      Product: t.product?.name || 'N/A',
       Notes: t.notes || '',
       Completed_At: t.completed_at ? new Date(t.completed_at).toISOString() : 'Pending'
     }));

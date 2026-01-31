@@ -5,7 +5,7 @@ class NotificationService {
   // Create a notification
   async create(userId, type, title, message, options = {}) {
     try {
-      const notification = new Notification({
+      const notification = await Notification.create({
         user_id: userId,
         type,
         title,
@@ -17,7 +17,6 @@ class NotificationService {
         expires_at: options.expires_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
       });
 
-      await notification.save();
       logger.info(`Notification created: ${type} for user ${userId}`);
       return notification;
     } catch (error) {
@@ -41,7 +40,7 @@ class NotificationService {
         expires_at: options.expires_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
       }));
 
-      await Notification.insertMany(notifications);
+      await Notification.bulkCreate(notifications);
       logger.info(`Bulk notifications created: ${type} for ${userIds.length} users`);
       return notifications;
     } catch (error) {
@@ -59,7 +58,7 @@ class NotificationService {
       `Your ${transactionType} of ${amount} NSL has been approved and processed successfully.`,
       {
         priority: 'high',
-        icon: '✅',
+        icon: 'check_circle',
         action_url: '/transactions'
       }
     );
@@ -74,7 +73,7 @@ class NotificationService {
       `Your ${transactionType} of ${amount} NSL was rejected. Reason: ${reason}`,
       {
         priority: 'high',
-        icon: '❌',
+        icon: 'cancel',
         action_url: '/transactions'
       }
     );
@@ -89,7 +88,7 @@ class NotificationService {
       `You have successfully purchased ${productName}. Valid until ${expiresAt.toLocaleDateString()}.`,
       {
         priority: 'high',
-        icon: '🎉',
+        icon: 'celebration',
         action_url: '/products'
       }
     );
@@ -104,7 +103,7 @@ class NotificationService {
       `Your ${productName} subscription will expire in ${daysLeft} days. Renew now to continue earning.`,
       {
         priority: 'medium',
-        icon: '⏰',
+        icon: 'alarm',
         action_url: '/products'
       }
     );
@@ -119,7 +118,7 @@ class NotificationService {
       `You earned ${amount} NSL from ${productName} today!`,
       {
         priority: 'low',
-        icon: '💰',
+        icon: 'payments',
         action_url: '/dashboard'
       }
     );
@@ -134,7 +133,7 @@ class NotificationService {
       `You earned ${bonusAmount} NSL from ${referredUsername}'s first purchase!`,
       {
         priority: 'high',
-        icon: '🎁',
+        icon: 'card_giftcard',
         action_url: '/referrals'
       }
     );
@@ -149,7 +148,7 @@ class NotificationService {
       'Congratulations! Your account has been approved. You can now access all features.',
       {
         priority: 'high',
-        icon: '✅',
+        icon: 'check_circle',
         action_url: '/dashboard'
       }
     );
@@ -164,7 +163,7 @@ class NotificationService {
       'Your KYC documents have been verified successfully. Your account is now fully activated.',
       {
         priority: 'high',
-        icon: '✅',
+        icon: 'verified',
         action_url: '/profile'
       }
     );
@@ -179,7 +178,7 @@ class NotificationService {
       message,
       {
         priority,
-        icon: '📢'
+        icon: 'campaign'
       }
     );
   }
@@ -193,7 +192,7 @@ class NotificationService {
       message,
       {
         priority: 'urgent',
-        icon: '🔒',
+        icon: 'lock',
         action_url: '/settings/security'
       }
     );
@@ -208,7 +207,7 @@ class NotificationService {
       `Congratulations! You have been upgraded to ${newLevel}. Enjoy your new benefits!`,
       {
         priority: 'high',
-        icon: '⭐',
+        icon: 'star',
         action_url: '/vip'
       }
     );
@@ -217,12 +216,11 @@ class NotificationService {
   // Mark notification as read
   async markAsRead(notificationId) {
     try {
-      const notification = await Notification.findByIdAndUpdate(
-        notificationId,
+      await Notification.update(
         { read: true, read_at: new Date() },
-        { new: true }
+        { where: { id: notificationId } }
       );
-      return notification;
+      return await Notification.findByPk(notificationId);
     } catch (error) {
       logger.error('Mark as read error:', error);
       throw error;
@@ -232,9 +230,9 @@ class NotificationService {
   // Mark all notifications as read for a user
   async markAllAsRead(userId) {
     try {
-      await Notification.updateMany(
-        { user_id: userId, read: false },
-        { read: true, read_at: new Date() }
+      await Notification.update(
+        { read: true, read_at: new Date() },
+        { where: { user_id: userId, read: false } }
       );
       return true;
     } catch (error) {
@@ -246,7 +244,7 @@ class NotificationService {
   // Delete notification
   async delete(notificationId) {
     try {
-      await Notification.findByIdAndDelete(notificationId);
+      await Notification.destroy({ where: { id: notificationId } });
       return true;
     } catch (error) {
       logger.error('Delete notification error:', error);
@@ -257,9 +255,8 @@ class NotificationService {
   // Get unread count
   async getUnreadCount(userId) {
     try {
-      const count = await Notification.countDocuments({
-        user_id: userId,
-        read: false
+      const count = await Notification.count({
+        where: { user_id: userId, read: false }
       });
       return count;
     } catch (error) {
@@ -284,12 +281,14 @@ class NotificationService {
       if (type) filter.type = type;
       if (priority) filter.priority = priority;
 
-      const notifications = await Notification.find(filter)
-        .sort({ created_at: -1 })
-        .limit(parseInt(limit))
-        .skip(parseInt(skip));
+      const notifications = await Notification.findAll({
+        where: filter,
+        order: [['created_at', 'DESC']],
+        limit: parseInt(limit),
+        offset: parseInt(skip)
+      });
 
-      const total = await Notification.countDocuments(filter);
+      const total = await Notification.count({ where: filter });
 
       return {
         notifications,

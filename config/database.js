@@ -1,46 +1,48 @@
 /**
  * Database Configuration
- * MongoDB connection settings and options
+ * MySQL connection via Sequelize
  */
 
-const mongoose = require('mongoose');
+const { Sequelize } = require('sequelize');
 const logger = require('../utils/logger');
+
+const databaseUrl = process.env.DATABASE_URL || 'mysql://root:password@localhost:3306/salonmoney';
+
+const sequelize = new Sequelize(databaseUrl, {
+  dialect: 'mysql',
+  logging: (msg) => logger.debug(msg),
+  pool: {
+    max: 10,
+    min: 2,
+    acquire: 30000,
+    idle: 10000
+  },
+  dialectOptions: {
+    connectTimeout: 10000
+  },
+  define: {
+    timestamps: true,
+    underscored: false
+  }
+});
 
 const connectDatabase = async () => {
   try {
-    const conn = await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/salonmoney', {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
-
-    logger.info(`MongoDB Connected: ${conn.connection.host}`);
-    logger.info(`Database Name: ${conn.connection.name}`);
-
-    // Handle connection events
-    mongoose.connection.on('error', (err) => {
-      logger.error('MongoDB connection error:', err);
-    });
-
-    mongoose.connection.on('disconnected', () => {
-      logger.warn('MongoDB disconnected. Attempting to reconnect...');
-    });
-
-    mongoose.connection.on('reconnected', () => {
-      logger.info('MongoDB reconnected successfully');
-    });
-
-    // Graceful shutdown
-    process.on('SIGINT', async () => {
-      await mongoose.connection.close();
-      logger.info('MongoDB connection closed through app termination');
-      process.exit(0);
-    });
-
-    return conn;
+    await sequelize.authenticate();
+    logger.info(`MySQL Connected: ${sequelize.config.host}`);
+    logger.info(`Database Name: ${sequelize.config.database}`);
+    return sequelize;
   } catch (error) {
-    logger.error('MongoDB connection failed:', error.message);
+    logger.error('MySQL connection failed:', error.message);
     process.exit(1);
   }
 };
 
-module.exports = connectDatabase;
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  await sequelize.close();
+  logger.info('MySQL connection closed through app termination');
+  process.exit(0);
+});
+
+module.exports = { sequelize, connectDatabase };

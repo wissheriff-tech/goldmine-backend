@@ -1,7 +1,8 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
-const User = require('../models/User');
+const { Op } = require('sequelize');
+const { User } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
@@ -32,37 +33,40 @@ router.post('/signup', validateSignup, async (req, res) => {
   try {
     const { username, phone, password, referred_by, email } = req.body;
 
-    const userExists = await User.findOne({ $or: [{ phone }, { username }] });
+    const userExists = await User.findOne({
+      where: {
+        [Op.or]: [{ phone }, { username }]
+      }
+    });
     if (userExists) {
       return res.status(400).json({ message: 'User with this phone or username already exists' });
     }
 
     if (email) {
-      const emailExists = await User.findOne({ email: email.toLowerCase() });
+      const emailExists = await User.findOne({ where: { email: email.toLowerCase() } });
       if (emailExists) {
         return res.status(400).json({ message: 'Email already registered' });
       }
     }
 
     const referral_code = generateReferralCode();
-    const user = new User({
-      username,
-      phone,
-      password_hash: password,
-      referral_code,
-      referred_by: referred_by || null,
-      status: 'pending',
-      email: email ? email.toLowerCase() : null,
-      authProvider: 'local'
-    });
 
     // Generate email verification token if email provided
     if (email) {
       const verificationToken = crypto.randomBytes(32).toString('hex');
-      user.emailVerificationToken = verificationToken;
-      user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
 
-      await user.save();
+      const user = await User.create({
+        username,
+        phone,
+        password_hash: password,
+        referral_code,
+        referred_by: referred_by || null,
+        status: 'pending',
+        email: email ? email.toLowerCase() : null,
+        authProvider: 'local',
+        emailVerificationToken: verificationToken,
+        emailVerificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+      });
 
       // Send verification email
       await emailService.sendVerificationEmail(email, username, verificationToken);
@@ -73,7 +77,7 @@ router.post('/signup', validateSignup, async (req, res) => {
         message: 'User registered successfully! Please check your email to verify your account.',
         requiresEmailVerification: true,
         user: {
-          id: user._id,
+          id: user.id,
           username: user.username,
           phone: user.phone,
           email: user.email,
@@ -82,13 +86,23 @@ router.post('/signup', validateSignup, async (req, res) => {
         }
       });
     } else {
-      await user.save();
+      const user = await User.create({
+        username,
+        phone,
+        password_hash: password,
+        referral_code,
+        referred_by: referred_by || null,
+        status: 'pending',
+        email: null,
+        authProvider: 'local'
+      });
+
       logger.info(`New user registered: ${username} (${phone})`);
 
       res.status(201).json({
         message: 'User registered successfully. Awaiting admin verification.',
         user: {
-          id: user._id,
+          id: user.id,
           username: user.username,
           phone: user.phone,
           referral_code: user.referral_code,
@@ -107,7 +121,9 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
   try {
     const { username, password, rememberMe } = req.body;
 
-    const user = await User.findOne({ username: username.toLowerCase() }).select('+twoFactorCode +twoFactorExpires');
+    const user = await User.scope('withSecrets').findOne({
+      where: { username: username.toLowerCase() }
+    });
     if (!user) {
       return res.status(401).json({ message: 'Invalid username or password' });
     }
@@ -130,7 +146,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       // Generate 6-digit code
       const code = Math.floor(100000 + Math.random() * 900000).toString();
       user.twoFactorCode = code;
-      user.twoFactorExpires = Date.now() + 10 * 60 * 1000; // 10 minutes
+      user.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
       await user.save();
 
       // Send 2FA code via email
@@ -139,7 +155,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       return res.json({
         message: '2FA code sent to your email',
         requiresTwoFactor: true,
-        userId: user._id
+        userId: user.id
       });
     }
 
@@ -151,13 +167,13 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
     const refreshTokenExpiry = rememberMe ? '90d' : (process.env.REFRESH_TOKEN_EXPIRE || '7d');
 
     const token = jwt.sign(
-      { id: user._id, username: user.username, role: user.role },
+      { id: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: tokenExpiry }
     );
 
     const refreshToken = jwt.sign(
-      { id: user._id },
+      { id: user.id },
       process.env.REFRESH_TOKEN_SECRET,
       { expiresIn: refreshTokenExpiry }
     );
@@ -178,7 +194,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       refreshToken,
       redirectTo,
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         phone: user.phone,
         email: user.email,
@@ -224,7 +240,7 @@ router.post('/refresh', (req, res) => {
 router.post('/change-password', authenticate, validateChangePassword, async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.scope('withSecrets').findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -258,7 +274,7 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
       return res.status(400).json({ message: 'User ID and code are required' });
     }
 
-    const user = await User.findById(userId).select('+twoFactorCode +twoFactorExpires');
+    const user = await User.scope('withSecrets').findByPk(userId);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -268,7 +284,7 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
       return res.status(400).json({ message: 'No 2FA code found. Please login again.' });
     }
 
-    if (Date.now() > user.twoFactorExpires) {
+    if (Date.now() > new Date(user.twoFactorExpires).getTime()) {
       return res.status(400).json({ message: '2FA code has expired. Please login again.' });
     }
 
@@ -277,20 +293,20 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
     }
 
     // Clear 2FA code
-    user.twoFactorCode = undefined;
-    user.twoFactorExpires = undefined;
+    user.twoFactorCode = null;
+    user.twoFactorExpires = null;
     user.last_login = new Date();
     await user.save();
 
     // Generate tokens
     const token = jwt.sign(
-      { id: user._id, username: user.username, role: user.role },
+      { id: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '24h' }
     );
 
     const refreshToken = jwt.sign(
-      { id: user._id },
+      { id: user.id },
       process.env.REFRESH_TOKEN_SECRET,
       { expiresIn: process.env.REFRESH_TOKEN_EXPIRE || '7d' }
     );
@@ -309,7 +325,7 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
       refreshToken,
       redirectTo,
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         phone: user.phone,
         email: user.email,
@@ -339,7 +355,7 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
       return res.status(400).json({ message: 'Email is required' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await User.findOne({ where: { email: email.toLowerCase() } });
 
     if (!user) {
       // Don't reveal if email exists or not
@@ -349,7 +365,7 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
     // Generate reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
     user.resetPasswordToken = resetToken;
-    user.resetPasswordExpires = Date.now() + 60 * 60 * 1000; // 1 hour
+    user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
     await user.save();
 
     // Send reset email
@@ -379,10 +395,12 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     }
 
-    const user = await User.findOne({
-      resetPasswordToken: token,
-      resetPasswordExpires: { $gt: Date.now() }
-    }).select('+resetPasswordToken +resetPasswordExpires');
+    const user = await User.scope('withSecrets').findOne({
+      where: {
+        resetPasswordToken: token,
+        resetPasswordExpires: { [Op.gt]: new Date() }
+      }
+    });
 
     if (!user) {
       return res.status(400).json({ message: 'Invalid or expired reset token' });
@@ -390,8 +408,8 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
 
     // Set new password
     user.password_hash = password;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
+    user.resetPasswordToken = null;
+    user.resetPasswordExpires = null;
     await user.save();
 
     logger.info(`Password reset successful for user: ${user.username}`);
@@ -408,7 +426,7 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
 router.post('/toggle-2fa', authenticate, async (req, res) => {
   try {
     const { enable, email } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -442,10 +460,12 @@ router.get('/verify-email/:token', async (req, res) => {
   try {
     const { token } = req.params;
 
-    const user = await User.findOne({
-      emailVerificationToken: token,
-      emailVerificationExpires: { $gt: Date.now() }
-    }).select('+emailVerificationToken +emailVerificationExpires');
+    const user = await User.scope('withSecrets').findOne({
+      where: {
+        emailVerificationToken: token,
+        emailVerificationExpires: { [Op.gt]: new Date() }
+      }
+    });
 
     if (!user) {
       return res.status(400).json({
@@ -455,8 +475,8 @@ router.get('/verify-email/:token', async (req, res) => {
     }
 
     user.emailVerified = true;
-    user.emailVerificationToken = undefined;
-    user.emailVerificationExpires = undefined;
+    user.emailVerificationToken = null;
+    user.emailVerificationExpires = null;
     await user.save();
 
     logger.info(`Email verified for user: ${user.username}`);
@@ -486,7 +506,7 @@ router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
       return res.status(400).json({ message: 'Email is required' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await User.findOne({ where: { email: email.toLowerCase() } });
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -499,7 +519,7 @@ router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
     // Generate new verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
     user.emailVerificationToken = verificationToken;
-    user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+    user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await user.save();
 
     // Send verification email
@@ -526,11 +546,11 @@ router.post('/google', authLimiter, async (req, res) => {
     }
 
     // Check if user exists with Google ID
-    let user = await User.findOne({ googleId });
+    let user = await User.findOne({ where: { googleId } });
 
     if (!user) {
       // Check if user exists with email
-      user = await User.findOne({ email: email.toLowerCase() });
+      user = await User.findOne({ where: { email: email.toLowerCase() } });
 
       if (user) {
         // Link Google account to existing user
@@ -543,7 +563,7 @@ router.post('/google', authLimiter, async (req, res) => {
         const username = email.split('@')[0] + '_' + Math.random().toString(36).substring(7);
         const referral_code = generateReferralCode();
 
-        user = new User({
+        user = await User.create({
           username,
           email: email.toLowerCase(),
           googleId,
@@ -555,20 +575,19 @@ router.post('/google', authLimiter, async (req, res) => {
           password_hash: crypto.randomBytes(32).toString('hex') // Random password
         });
 
-        await user.save();
         logger.info(`New user registered via Google: ${username}`);
       }
     }
 
     // Generate tokens
     const token = jwt.sign(
-      { id: user._id, username: user.username, role: user.role },
+      { id: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '24h' }
     );
 
     const refreshToken = jwt.sign(
-      { id: user._id },
+      { id: user.id },
       process.env.REFRESH_TOKEN_SECRET,
       { expiresIn: process.env.REFRESH_TOKEN_EXPIRE || '7d' }
     );
@@ -590,7 +609,7 @@ router.post('/google', authLimiter, async (req, res) => {
       refreshToken,
       redirectTo,
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         email: user.email,
         role: user.role,
@@ -620,12 +639,12 @@ router.post('/facebook', authLimiter, async (req, res) => {
     }
 
     // Check if user exists with Facebook ID
-    let user = await User.findOne({ facebookId });
+    let user = await User.findOne({ where: { facebookId } });
 
     if (!user) {
       // Check if user exists with email (if provided)
       if (email) {
-        user = await User.findOne({ email: email.toLowerCase() });
+        user = await User.findOne({ where: { email: email.toLowerCase() } });
       }
 
       if (user) {
@@ -642,7 +661,7 @@ router.post('/facebook', authLimiter, async (req, res) => {
                                : 'fb_' + facebookId;
         const referral_code = generateReferralCode();
 
-        user = new User({
+        user = await User.create({
           username,
           email: email ? email.toLowerCase() : null,
           facebookId,
@@ -654,20 +673,19 @@ router.post('/facebook', authLimiter, async (req, res) => {
           password_hash: crypto.randomBytes(32).toString('hex') // Random password
         });
 
-        await user.save();
         logger.info(`New user registered via Facebook: ${username}`);
       }
     }
 
     // Generate tokens
     const token = jwt.sign(
-      { id: user._id, username: user.username, role: user.role },
+      { id: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRE || '24h' }
     );
 
     const refreshToken = jwt.sign(
-      { id: user._id },
+      { id: user.id },
       process.env.REFRESH_TOKEN_SECRET,
       { expiresIn: process.env.REFRESH_TOKEN_EXPIRE || '7d' }
     );
@@ -689,7 +707,7 @@ router.post('/facebook', authLimiter, async (req, res) => {
       refreshToken,
       redirectTo,
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         email: user.email,
         role: user.role,
@@ -706,4 +724,4 @@ router.post('/facebook', authLimiter, async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;
