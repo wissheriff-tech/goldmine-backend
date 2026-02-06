@@ -162,10 +162,11 @@ const withdrawSchema = Joi.object({
 
 // Product Schemas
 const buyProductSchema = Joi.object({
-  product_id: Joi.string()
+  product_id: Joi.number().integer()
     .required()
     .messages({
-      'any.required': 'Product ID is required'
+      'any.required': 'Product ID is required',
+      'number.base': 'Product ID must be a number'
     })
 });
 

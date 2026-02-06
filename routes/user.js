@@ -1,9 +1,12 @@
 const express = require('express');
+const { Op } = require('sequelize');
+const { sequelize } = require('../models');
 const User = require('../models/User');
 const { FEE } = require('../config/constants');
 const Transaction = require('../models/Transaction');
 const Referral = require('../models/Referral');
 const Product = require('../models/Product');
+const UserProduct = require('../models/UserProduct');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const binanceService = require('../services/binanceService');
@@ -25,22 +28,25 @@ const router = express.Router();
 // Get user dashboard
 router.get('/dashboard', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id)
-      .populate('products');
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    const referralCount = await Referral.countDocuments({ referrer_id: user._id });
-    const totalReferralEarnings = await Referral.aggregate([
-      { $match: { referrer_id: user._id, status: 'paid' } },
-      { $group: { _id: null, total: { $sum: '$bonus_NSL' } } }
-    ]);
+    const userProducts = await UserProduct.findAll({
+      where: { user_id: user.id, is_active: true },
+      include: [{ model: Product, as: 'product' }]
+    });
+
+    const referralCount = await Referral.count({ where: { referrer_id: user.id } });
+    const totalReferralEarnings = await Referral.sum('bonus_NSL', {
+      where: { referrer_id: user.id, status: 'paid' }
+    });
 
     res.json({
       user: {
-        id: user._id,
+        id: user.id,
         phone: user.phone,
         username: user.username,
         role: user.role,
@@ -54,10 +60,10 @@ router.get('/dashboard', authenticate, async (req, res) => {
         created_at: user.created_at,
         profile_photo: user.profile_photo
       },
-      products: user.products,
+      products: userProducts,
       referrals: {
         count: referralCount,
-        total_earnings_NSL: totalReferralEarnings[0]?.total || 0
+        total_earnings_NSL: totalReferralEarnings || 0
       }
     });
   } catch (error) {
@@ -70,18 +76,18 @@ router.get('/dashboard', authenticate, async (req, res) => {
 router.get('/transactions', authenticate, async (req, res) => {
   try {
     const { type, status, limit = 20, skip = 0 } = req.query;
-    const filter = { user_id: req.user.id };
+    const where = { user_id: req.user.id };
 
-    if (type) filter.type = type;
-    if (status) filter.status = status;
+    if (type) where.type = type;
+    if (status) where.status = status;
 
-    const transactions = await Transaction.find(filter)
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip))
-      .populate('approved_by', 'phone');
-
-    const total = await Transaction.countDocuments(filter);
+    const { count: total, rows: transactions } = await Transaction.findAndCountAll({
+      where,
+      order: [['timestamp', 'DESC']],
+      limit: parseInt(limit),
+      offset: parseInt(skip),
+      include: [{ model: User, as: 'approver', attributes: ['phone'] }]
+    });
 
     res.json({
       transactions,
@@ -101,16 +107,16 @@ router.get('/transactions', authenticate, async (req, res) => {
 router.post('/generate-deposit-address', authenticate, async (req, res) => {
   try {
     const { amount_NSL } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
     // Generate unique deposit address via Binance
-    const depositInfo = await binanceService.createDepositAddress(user._id, 'USDT');
+    const depositInfo = await binanceService.createDepositAddress(user.id, 'USDT');
 
-    logger.info(`Deposit address generated for user ${user.phone || user._id}: ${depositInfo.address}`);
+    logger.info(`Deposit address generated for user ${user.phone || user.id}: ${depositInfo.address}`);
 
     res.json({
       address: depositInfo.address,
@@ -129,7 +135,7 @@ router.post('/generate-deposit-address', authenticate, async (req, res) => {
 router.post('/recharge', authenticate, transactionLimiter, validateRecharge, async (req, res) => {
   try {
     const { amount_NSL, payment_method, deposit_address, tx_hash } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -149,8 +155,8 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
     const conversionRate = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
     const amount_usdt = parseFloat((amountNSL / conversionRate).toFixed(2));
 
-    const transaction = new Transaction({
-      user_id: user._id,
+    const transaction = await Transaction.create({
+      user_id: user.id,
       type: 'recharge',
       amount_NSL: amountNSL,
       amount_usdt,
@@ -161,13 +167,12 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
       notes: `Recharge request for ${amountNSL} NSL via ${payment_method || 'Binance'}`
     });
 
-    await transaction.save();
-    logger.info(`Recharge requested: ${user.phone || user._id} - ${amountNSL} NSL via ${payment_method}`);
+    logger.info(`Recharge requested: ${user.phone || user.id} - ${amountNSL} NSL via ${payment_method}`);
 
     res.status(201).json({
       message: 'Recharge request submitted successfully! Finance admin will verify and approve your payment.',
       transaction: {
-        id: transaction._id,
+        id: transaction.id,
         amount_NSL: amountNSL,
         amount_usdt,
         status: 'pending',
@@ -185,7 +190,7 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
 router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
   try {
     const { amount_NSL } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -237,7 +242,7 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
 router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, async (req, res) => {
   try {
     const { amount_NSL, withdrawal_address, network } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -257,15 +262,13 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
     let netAmount = amount_NSL;
 
     if (user.role !== 'superadmin') {
-      // Standard user - apply 15% fee
       withdrawalFee = (amount_NSL * FEE.WITHDRAWAL_FEE_PERCENTAGE) / 100;
       netAmount = amount_NSL - withdrawalFee;
     }
-    // Super admin pays no fee, gets full amount
 
-    const totalDeduction = amount_NSL; // Total amount deducted from balance
+    const totalDeduction = amount_NSL;
 
-    // Check if user has sufficient balance (including fee)
+    // Check if user has sufficient balance
     if (totalDeduction > user.balance_NSL) {
       return res.status(400).json({
         message: 'Insufficient balance to cover withdrawal amount and fees',
@@ -286,10 +289,10 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
 
     const amount_usdt = (netAmount / parseInt(process.env.USDT_TO_NSL_WITHDRAWAL || 25)).toFixed(2);
 
-    const transaction = new Transaction({
-      user_id: user._id,
+    const transaction = await Transaction.create({
+      user_id: user.id,
       type: 'withdrawal',
-      amount_NSL: netAmount, // Net amount after fees
+      amount_NSL: netAmount,
       amount_usdt,
       status: 'pending',
       withdrawal_address,
@@ -298,15 +301,14 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
       notes: `Withdrawal: ${amount_NSL} NSL (Fee: ${withdrawalFee.toFixed(2)} NSL, Net: ${netAmount.toFixed(2)} NSL) to ${withdrawal_address}`
     });
 
-    await transaction.save();
-    logger.info(`Withdrawal requested: ${user.phone || user._id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
+    logger.info(`Withdrawal requested: ${user.phone || user.id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
 
     res.status(201).json({
       message: 'Withdrawal request submitted! Finance admin will process your withdrawal within 24 hours.',
       transaction: {
-        id: transaction._id,
+        id: transaction.id,
         requested_amount_NSL: amount_NSL,
-        fee_NSL: totalFee.toFixed(2),
+        fee_NSL: withdrawalFee.toFixed(2),
         net_amount_NSL: netAmount.toFixed(2),
         amount_usdt,
         withdrawal_address,
@@ -315,10 +317,9 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
         timestamp: transaction.timestamp
       },
       fee_breakdown: {
-        percentage_fee: `${feePercentage}%`,
-        percentage_amount: percentageFee.toFixed(2),
-        fixed_fee: fixedFee,
-        total_fee: totalFee.toFixed(2)
+        percentage: `${FEE.WITHDRAWAL_FEE_PERCENTAGE}%`,
+        fee_amount: withdrawalFee.toFixed(2),
+        is_exempt: user.role === 'superadmin'
       }
     });
   } catch (error) {
@@ -330,16 +331,22 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
 // Get referrals
 router.get('/referrals', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const referrals = await Referral.findAll({
+      where: { referrer_id: req.user.id },
+      include: [{ model: User, as: 'referred', attributes: ['phone', 'balance_NSL', 'created_at'] }],
+      order: [['timestamp', 'DESC']]
+    });
 
-    const referrals = await Referral.find({ referrer_id: user._id })
-      .populate('referred_id', 'phone balance_NSL created_at')
-      .sort({ timestamp: -1 });
+    const pendingCount = await Referral.count({
+      where: { referrer_id: req.user.id, status: 'pending' }
+    });
+
+    const totalEarned = referrals.reduce((sum, ref) => sum + (ref.status === 'paid' ? ref.bonus_NSL : 0), 0);
 
     const stats = {
       total_referrals: referrals.length,
-      pending_bonuses: await Referral.countDocuments({ referrer_id: user._id, status: 'pending' }),
-      total_earned_NSL: referrals.reduce((sum, ref) => sum + (ref.status === 'paid' ? ref.bonus_NSL : 0), 0)
+      pending_bonuses: pendingCount,
+      total_earned_NSL: totalEarned
     };
 
     res.json({
@@ -362,127 +369,78 @@ router.get('/referrals/leaderboard', authenticate, async (req, res) => {
     const now = new Date();
 
     if (period === 'today') {
-      dateFilter = { $gte: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
+      dateFilter = { [Op.gte]: new Date(now.getFullYear(), now.getMonth(), now.getDate()) };
     } else if (period === 'week') {
-      dateFilter = { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
+      dateFilter = { [Op.gte]: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
     } else if (period === 'month') {
-      dateFilter = { $gte: new Date(now.getFullYear(), now.getMonth(), 1) };
+      dateFilter = { [Op.gte]: new Date(now.getFullYear(), now.getMonth(), 1) };
     }
 
-    const matchStage = {
-      status: 'paid'
-    };
-
+    const whereClause = { status: 'paid' };
     if (period !== 'all') {
-      matchStage.timestamp = dateFilter;
+      whereClause.timestamp = dateFilter;
     }
 
-    // Get top referrers
-    const leaderboard = await Referral.aggregate([
-      {
-        $match: matchStage
-      },
-      {
-        $group: {
-          _id: '$referrer_id',
-          total_referrals: { $sum: 1 },
-          total_earnings: { $sum: '$bonus_NSL' }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      {
-        $unwind: '$user'
-      },
-      {
-        $project: {
-          _id: 1,
-          username: '$user.username',
-          phone: '$user.phone',
-          vip_level: '$user.vip_level',
-          total_referrals: 1,
-          total_earnings: 1
-        }
-      },
-      {
-        $sort: { total_earnings: -1, total_referrals: -1 }
-      },
-      {
-        $limit: parseInt(limit)
-      }
-    ]);
+    // Get top referrers using Sequelize grouping
+    const leaderboardData = await Referral.findAll({
+      where: whereClause,
+      attributes: [
+        'referrer_id',
+        [sequelize.fn('COUNT', sequelize.col('Referral.id')), 'total_referrals'],
+        [sequelize.fn('SUM', sequelize.col('bonus_NSL')), 'total_earnings']
+      ],
+      include: [{
+        model: User,
+        as: 'referrer',
+        attributes: ['username', 'phone', 'vip_level']
+      }],
+      group: ['referrer_id', 'referrer.id'],
+      order: [[sequelize.fn('SUM', sequelize.col('bonus_NSL')), 'DESC']],
+      limit: parseInt(limit)
+    });
 
-    // Add rank
-    const rankedLeaderboard = leaderboard.map((entry, index) => ({
+    const rankedLeaderboard = leaderboardData.map((entry, index) => ({
       rank: index + 1,
-      user_id: entry._id,
-      username: entry.username,
-      phone: entry.phone,
-      vip_level: entry.vip_level,
-      total_referrals: entry.total_referrals,
-      total_earnings: entry.total_earnings
+      user_id: entry.referrer_id,
+      username: entry.referrer?.username,
+      phone: entry.referrer?.phone,
+      vip_level: entry.referrer?.vip_level,
+      total_referrals: parseInt(entry.getDataValue('total_referrals')) || 0,
+      total_earnings: parseFloat(entry.getDataValue('total_earnings')) || 0
     }));
 
-    // Find current user's rank
-    const currentUser = await User.findById(req.user.id);
-    const userReferrals = await Referral.aggregate([
-      {
-        $match: {
-          referrer_id: currentUser._id,
-          status: 'paid',
-          ...(period !== 'all' && { timestamp: dateFilter })
-        }
-      },
-      {
-        $group: {
-          _id: null,
-          total_referrals: { $sum: 1 },
-          total_earnings: { $sum: '$bonus_NSL' }
-        }
-      }
-    ]);
+    // Find current user's stats
+    const userStats = await Referral.findOne({
+      where: { ...whereClause, referrer_id: req.user.id },
+      attributes: [
+        [sequelize.fn('COUNT', sequelize.col('id')), 'total_referrals'],
+        [sequelize.fn('SUM', sequelize.col('bonus_NSL')), 'total_earnings']
+      ]
+    });
 
-    const userStats = userReferrals[0] || { total_referrals: 0, total_earnings: 0 };
+    const userTotalEarnings = parseFloat(userStats?.getDataValue('total_earnings')) || 0;
+    const userTotalReferrals = parseInt(userStats?.getDataValue('total_referrals')) || 0;
 
     // Calculate user's rank
-    const usersAbove = await Referral.aggregate([
-      {
-        $match: {
-          status: 'paid',
-          ...(period !== 'all' && { timestamp: dateFilter })
-        }
-      },
-      {
-        $group: {
-          _id: '$referrer_id',
-          total_earnings: { $sum: '$bonus_NSL' }
-        }
-      },
-      {
-        $match: {
-          total_earnings: { $gt: userStats.total_earnings }
-        }
-      },
-      {
-        $count: 'count'
-      }
-    ]);
+    const usersAbove = await Referral.count({
+      where: whereClause,
+      attributes: ['referrer_id'],
+      group: ['referrer_id'],
+      having: sequelize.where(
+        sequelize.fn('SUM', sequelize.col('bonus_NSL')),
+        { [Op.gt]: userTotalEarnings }
+      )
+    });
 
-    const userRank = usersAbove[0]?.count + 1 || 1;
+    const userRank = (Array.isArray(usersAbove) ? usersAbove.length : 0) + 1;
 
     res.json({
       period,
       leaderboard: rankedLeaderboard,
       current_user: {
         rank: userRank,
-        total_referrals: userStats.total_referrals,
-        total_earnings: userStats.total_earnings
+        total_referrals: userTotalReferrals,
+        total_earnings: userTotalEarnings
       }
     });
   } catch (error) {
@@ -495,7 +453,7 @@ router.get('/referrals/leaderboard', authenticate, async (req, res) => {
 router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => {
   try {
     const { username, email, phone } = req.body;
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -503,42 +461,37 @@ router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => 
 
     // Validate and update fields
     if (username && username !== user.username) {
-      // Check if username is already taken
-      const existingUser = await User.findOne({ username });
-      if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+      const existingUser = await User.findOne({ where: { username } });
+      if (existingUser && existingUser.id !== user.id) {
         return res.status(400).json({ message: 'Username already taken' });
       }
       user.username = username;
     }
 
     if (email && email !== user.email) {
-      // Check if email is already taken
-      const existingUser = await User.findOne({ email });
-      if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+      const existingUser = await User.findOne({ where: { email } });
+      if (existingUser && existingUser.id !== user.id) {
         return res.status(400).json({ message: 'Email already in use' });
       }
       user.email = email;
-      // Note: Email verification would be needed in production
       user.emailVerified = false;
     }
 
     if (phone && phone !== user.phone) {
-      // Check if phone is already taken
-      const existingUser = await User.findOne({ phone });
-      if (existingUser && existingUser._id.toString() !== user._id.toString()) {
+      const existingUser = await User.findOne({ where: { phone } });
+      if (existingUser && existingUser.id !== user.id) {
         return res.status(400).json({ message: 'Phone number already in use' });
       }
       user.phone = phone;
     }
 
-    user.updated_at = new Date();
     await user.save();
 
-    logger.info(`Profile updated for user ${user._id}`);
+    logger.info(`Profile updated for user ${user.id}`);
     res.json({
       message: 'Profile updated successfully',
       user: {
-        id: user._id,
+        id: user.id,
         username: user.username,
         email: user.email,
         phone: user.phone,
@@ -559,9 +512,8 @@ router.post('/upload-profile-photo', authenticate, profileUpload.single('profile
       return res.status(400).json({ message: 'No file uploaded' });
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
     if (!user) {
-      // Delete uploaded file if user not found
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ message: 'User not found' });
     }
@@ -579,13 +531,12 @@ router.post('/upload-profile-photo', authenticate, profileUpload.single('profile
     user.profile_photo = photoUrl;
     await user.save();
 
-    logger.info(`Profile photo uploaded for user ${user._id}`);
+    logger.info(`Profile photo uploaded for user ${user.id}`);
     res.json({
       message: 'Profile photo uploaded successfully',
       profile_photo: photoUrl
     });
   } catch (error) {
-    // Delete uploaded file on error
     if (req.file) {
       fs.unlinkSync(req.file.path);
     }
@@ -601,16 +552,15 @@ router.post('/transactions/:id/upload-payment-proof', authenticate, paymentUploa
       return res.status(400).json({ message: 'No file uploaded' });
     }
 
-    const transaction = await Transaction.findById(req.params.id);
+    const transaction = await Transaction.findByPk(req.params.id);
 
     if (!transaction) {
-      // Delete uploaded file if transaction not found
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ message: 'Transaction not found' });
     }
 
     // Verify the transaction belongs to the user
-    if (transaction.user_id.toString() !== req.user.id) {
+    if (transaction.user_id !== parseInt(req.user.id)) {
       fs.unlinkSync(req.file.path);
       return res.status(403).json({ message: 'Unauthorized access to transaction' });
     }
@@ -634,17 +584,16 @@ router.post('/transactions/:id/upload-payment-proof', authenticate, paymentUploa
     transaction.payment_proof = proofUrl;
     await transaction.save();
 
-    logger.info(`Payment proof uploaded for transaction ${transaction._id} by user ${req.user.id}`);
+    logger.info(`Payment proof uploaded for transaction ${transaction.id} by user ${req.user.id}`);
     res.json({
       message: 'Payment proof uploaded successfully',
       transaction: {
-        id: transaction._id,
+        id: transaction.id,
         payment_proof: proofUrl,
         status: transaction.status
       }
     });
   } catch (error) {
-    // Delete uploaded file on error
     if (req.file) {
       fs.unlinkSync(req.file.path);
     }
@@ -665,19 +614,13 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
       return res.status(400).json({ message: 'No files uploaded' });
     }
 
-    const user = await User.findById(req.user.id);
+    const user = await User.findByPk(req.user.id);
 
     if (!user) {
-      // Delete all uploaded files if user not found
       Object.values(req.files).forEach(fileArray => {
         fileArray.forEach(file => fs.unlinkSync(file.path));
       });
       return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Initialize kyc_documents if it doesn't exist
-    if (!user.kyc_documents) {
-      user.kyc_documents = {};
     }
 
     const uploadedDocs = {};
@@ -686,10 +629,11 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
     for (const [fieldName, fileArray] of Object.entries(req.files)) {
       if (fileArray && fileArray.length > 0) {
         const file = fileArray[0];
+        const kycField = `kyc_${fieldName}`;
 
         // Delete old document if exists
-        if (user.kyc_documents[fieldName]) {
-          const oldDocPath = path.join(__dirname, '../', user.kyc_documents[fieldName]);
+        if (user[kycField]) {
+          const oldDocPath = path.join(__dirname, '../', user[kycField]);
           if (fs.existsSync(oldDocPath)) {
             fs.unlinkSync(oldDocPath);
           }
@@ -697,25 +641,27 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
 
         // Save new document path
         const docUrl = `/uploads/kyc/${file.filename}`;
-        user.kyc_documents[fieldName] = docUrl;
+        user[kycField] = docUrl;
         uploadedDocs[fieldName] = docUrl;
       }
     }
 
-    // Mark as modified for nested object
-    user.markModified('kyc_documents');
     await user.save();
 
-    logger.info(`KYC documents uploaded for user ${user._id}: ${Object.keys(uploadedDocs).join(', ')}`);
+    logger.info(`KYC documents uploaded for user ${user.id}: ${Object.keys(uploadedDocs).join(', ')}`);
 
     res.json({
       message: 'KYC documents uploaded successfully',
       uploaded_documents: uploadedDocs,
-      kyc_documents: user.kyc_documents,
+      kyc_documents: {
+        id_front: user.kyc_id_front,
+        id_back: user.kyc_id_back,
+        selfie: user.kyc_selfie,
+        additional: user.kyc_additional
+      },
       kyc_verified: user.kyc_verified
     });
   } catch (error) {
-    // Delete all uploaded files on error
     if (req.files) {
       Object.values(req.files).forEach(fileArray => {
         fileArray.forEach(file => {
@@ -735,18 +681,19 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
 // Get KYC status
 router.get('/kyc/status', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('kyc_verified kyc_documents');
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['kyc_verified', 'kyc_id_front', 'kyc_id_back', 'kyc_selfie', 'kyc_additional']
+    });
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Check which documents are uploaded
     const uploadedDocs = {
-      id_front: !!user.kyc_documents?.id_front,
-      id_back: !!user.kyc_documents?.id_back,
-      selfie: !!user.kyc_documents?.selfie,
-      additional: !!user.kyc_documents?.additional
+      id_front: !!user.kyc_id_front,
+      id_back: !!user.kyc_id_back,
+      selfie: !!user.kyc_selfie,
+      additional: !!user.kyc_additional
     };
 
     const requiredDocs = ['id_front', 'id_back', 'selfie'];

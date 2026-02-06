@@ -144,12 +144,13 @@ router.get('/user/dashboard', authenticate, async (req, res) => {
       },
       charts: {
         transaction_history: transactionHistory.map(t => ({
-          _id: { date: t.date, type: t.type },
+          date: t.date,
+          type: t.type,
           count: parseInt(t.count),
           amount: parseFloat(t.amount) || 0
         })),
         income_trend: incomeTrend.map(t => ({
-          _id: t.date,
+          date: t.date,
           total: parseFloat(t.total) || 0
         }))
       },
@@ -338,7 +339,7 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
         new_today: newUsersToday,
         new_this_month: newUsersThisMonth,
         vip_distribution: vipDistribution.map(v => ({
-          _id: v.vip_level,
+          vip_level: v.vip_level,
           count: parseInt(v.count)
         }))
       },
@@ -348,7 +349,7 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
         approved: approvedTransactions,
         rejected: rejectedTransactions,
         by_type: transactionsByType.map(t => ({
-          _id: t.type,
+          type: t.type,
           count: parseInt(t.count),
           total_NSL: parseFloat(t.total_NSL) || 0,
           total_USDT: parseFloat(t.total_USDT) || 0
@@ -389,11 +390,11 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
       },
       charts: {
         user_growth: userGrowth.map(u => ({
-          _id: u.date,
+          date: u.date,
           count: parseInt(u.count)
         })),
         revenue_trend: revenueTrend.map(r => ({
-          _id: r.date,
+          date: r.date,
           NSL: parseFloat(r.NSL) || 0,
           USDT: parseFloat(r.USDT) || 0
         }))
@@ -489,7 +490,7 @@ router.get('/finance/dashboard', authenticate, authorize(['superadmin', 'finance
     });
 
     const formattedPendingByType = pendingByType.map(p => ({
-      _id: p.type,
+      type: p.type,
       count: parseInt(p.count),
       total_NSL: parseFloat(p.total_NSL) || 0,
       total_USDT: parseFloat(p.total_USDT) || 0

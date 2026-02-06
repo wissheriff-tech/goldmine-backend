@@ -48,7 +48,7 @@ router.patch('/:id/read', authenticate, async (req, res) => {
     }
 
     // Verify notification belongs to user
-    if (notification.user_id.toString() !== req.user.id.toString()) {
+    if (notification.user_id !== req.user.id) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
@@ -85,7 +85,7 @@ router.delete('/:id', authenticate, async (req, res) => {
     }
 
     // Verify notification belongs to user
-    if (notification.user_id.toString() !== req.user.id.toString()) {
+    if (notification.user_id !== req.user.id) {
       return res.status(403).json({ message: 'Unauthorized' });
     }
 
@@ -188,11 +188,11 @@ router.get('/admin/stats', authenticate, authorize(['superadmin', 'admin']), asy
       unread: unreadNotifications,
       read: readNotifications,
       by_type: notificationsByType.map(n => ({
-        _id: n.type,
+        type: n.type,
         count: parseInt(n.count)
       })),
       by_priority: notificationsByPriority.map(n => ({
-        _id: n.priority,
+        priority: n.priority,
         count: parseInt(n.count)
       }))
     });

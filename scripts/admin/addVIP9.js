@@ -1,18 +1,15 @@
-const mongoose = require('mongoose');
-const Product = require('../models/Product');
-const User = require('../models/User');
+const { sequelize } = require('../../config/database');
+const Product = require('../../models/Product');
+const User = require('../../models/User');
 require('dotenv').config();
 
 async function addVIP9() {
   try {
-    // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
+    // Connect to MySQL via Sequelize
+    await sequelize.authenticate();
 
-    console.log('📡 Connected to MongoDB');
-    console.log('🌟 Adding VIP9 - Ultimate Elite Package...\n');
+    console.log('Connected to MySQL');
+    console.log('Adding VIP9 - Ultimate Elite Package...\n');
 
     // Get NSL to USDT conversion rate
     const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
@@ -47,7 +44,7 @@ async function addVIP9() {
     const monthlyIncome = vip9Data.daily_income_NSL * 30;
 
     // Check if VIP9 already exists
-    const existingVIP9 = await Product.findOne({ name: 'VIP9' });
+    const existingVIP9 = await Product.findOne({ where: { name: 'VIP9' } });
 
     if (existingVIP9) {
       // Update existing VIP9
@@ -61,7 +58,7 @@ async function addVIP9() {
 
       await existingVIP9.save();
 
-      console.log('✅ Updated existing VIP9');
+      console.log('Updated existing VIP9');
     } else {
       // Create new VIP9
       const vip9Product = await Product.create({
@@ -75,38 +72,38 @@ async function addVIP9() {
         active: true
       });
 
-      console.log('🆕 Created new VIP9');
+      console.log('Created new VIP9');
     }
 
-    console.log('\n📊 VIP9 Product Details:');
-    console.log('─'.repeat(60));
+    console.log('\nVIP9 Product Details:');
+    console.log('-'.repeat(60));
     console.log(`   Name: ${vip9Data.name}`);
     console.log(`   Price: ${vip9Data.price_NSL.toLocaleString()} NSL (${price_usdt} USDT)`);
     console.log(`   Daily Income: ${vip9Data.daily_income_NSL.toLocaleString()} NSL`);
     console.log(`   ROI Period: ${roiDays} days`);
     console.log(`   Monthly Income: ${monthlyIncome.toLocaleString()} NSL`);
     console.log(`   Benefits: ${vip9Data.benefits.length} premium features`);
-    console.log('─'.repeat(60));
+    console.log('-'.repeat(60));
 
     // Update super admin to VIP9
-    console.log('\n🔄 Updating super admin to VIP9...');
-    const superAdmin = await User.findOne({ phone: '+232777777777' });
+    console.log('\nUpdating super admin to VIP9...');
+    const superAdmin = await User.findOne({ where: { phone: '+232777777777' } });
 
     if (superAdmin) {
       superAdmin.vip_level = 'VIP9';
       await superAdmin.save();
-      console.log(`✅ Super admin (${superAdmin.phone}) updated to VIP9`);
+      console.log(`Super admin (${superAdmin.phone}) updated to VIP9`);
     } else {
-      console.log('⚠️  Super admin not found');
+      console.log('Super admin not found');
     }
 
     // Display all products
-    console.log('\n📈 All VIP Products:');
-    console.log('─'.repeat(80));
+    console.log('\nAll VIP Products:');
+    console.log('-'.repeat(80));
     console.log('Level | Price (NSL)  | Daily Income | ROI Days | Monthly Income');
-    console.log('─'.repeat(80));
+    console.log('-'.repeat(80));
 
-    const products = await Product.find().sort({ price_NSL: 1 });
+    const products = await Product.findAll({ order: [['price_NSL', 'ASC']] });
     products.forEach(p => {
       const monthly = p.daily_income_NSL * 30;
       const roi = Math.ceil(p.price_NSL / p.daily_income_NSL);
@@ -116,17 +113,17 @@ async function addVIP9() {
         `${roi.toString().padEnd(9)}| ${monthly.toLocaleString()}`
       );
     });
-    console.log('─'.repeat(80));
+    console.log('-'.repeat(80));
 
-    console.log('\n✨ VIP9 added successfully!');
-    console.log(`📊 Total VIP Products: ${products.length}`);
+    console.log('\nVIP9 added successfully!');
+    console.log(`Total VIP Products: ${products.length}`);
 
-    await mongoose.connection.close();
-    console.log('\n✅ Database connection closed');
+    await sequelize.close();
+    console.log('\nDatabase connection closed');
     process.exit(0);
   } catch (error) {
-    console.error('❌ Error adding VIP9:', error);
-    await mongoose.connection.close();
+    console.error('Error adding VIP9:', error);
+    await sequelize.close();
     process.exit(1);
   }
 }

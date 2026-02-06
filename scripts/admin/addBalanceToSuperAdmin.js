@@ -1,27 +1,24 @@
-const mongoose = require('mongoose');
-const User = require('../models/User');
+const { sequelize } = require('../../config/database');
+const User = require('../../models/User');
 require('dotenv').config();
 
 async function addBalanceToSuperAdmin() {
   try {
-    // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
+    // Connect to MySQL via Sequelize
+    await sequelize.authenticate();
 
-    console.log('📡 Connected to MongoDB');
+    console.log('Connected to MySQL');
 
     // Find super admin by phone
-    const superAdmin = await User.findOne({ phone: '+232777777777' });
+    const superAdmin = await User.findOne({ where: { phone: '+232777777777' } });
 
     if (!superAdmin) {
-      console.log('❌ Super admin not found with phone +232777777777');
-      await mongoose.connection.close();
+      console.log('Super admin not found with phone +232777777777');
+      await sequelize.close();
       process.exit(1);
     }
 
-    console.log('\n📋 Current Super Admin Details:');
+    console.log('\nCurrent Super Admin Details:');
     console.log(`   Phone: ${superAdmin.phone}`);
     console.log(`   Username: ${superAdmin.username}`);
     console.log(`   Current Balance NSL: ${superAdmin.balance_NSL.toLocaleString()}`);
@@ -35,19 +32,19 @@ async function addBalanceToSuperAdmin() {
 
     await superAdmin.save();
 
-    console.log('\n✅ Balance Updated Successfully!');
-    console.log('─'.repeat(50));
+    console.log('\nBalance Updated Successfully!');
+    console.log('-'.repeat(50));
     console.log(`   New Balance NSL: ${superAdmin.balance_NSL.toLocaleString()} NSL`);
     console.log(`   New Balance USDT: ${superAdmin.balance_usdt.toLocaleString()} USDT`);
     console.log(`   New VIP Level: ${superAdmin.vip_level}`);
-    console.log('─'.repeat(50));
+    console.log('-'.repeat(50));
 
-    await mongoose.connection.close();
-    console.log('\n✅ Database connection closed');
+    await sequelize.close();
+    console.log('\nDatabase connection closed');
     process.exit(0);
   } catch (error) {
-    console.error('❌ Error updating balance:', error);
-    await mongoose.connection.close();
+    console.error('Error updating balance:', error);
+    await sequelize.close();
     process.exit(1);
   }
 }

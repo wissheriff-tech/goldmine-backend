@@ -1,7 +1,9 @@
 const socketIo = require('socket.io');
 const jwt = require('jsonwebtoken');
+const { Op } = require('sequelize');
 const User = require('../models/User');
 const Chat = require('../models/Chat');
+const ChatMessage = require('../models/ChatMessage');
 const logger = require('../utils/logger');
 
 let io;
@@ -33,13 +35,13 @@ const initializeSocket = (server) => {
       }
 
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-      const user = await User.findById(decoded.userId);
+      const user = await User.findByPk(decoded.userId);
 
       if (!user) {
         return next(new Error('Authentication error: User not found'));
       }
 
-      socket.userId = user._id.toString();
+      socket.userId = String(user.id);
       socket.userRole = user.role;
       socket.username = user.username;
 
@@ -70,7 +72,12 @@ const initializeSocket = (server) => {
     // User joins a chat
     socket.on('join-chat', async (chatId) => {
       try {
-        const chat = await Chat.findById(chatId).populate('user_id admin_id');
+        const chat = await Chat.findByPk(chatId, {
+          include: [
+            { model: User, as: 'user', attributes: ['id', 'username', 'phone'] },
+            { model: User, as: 'admin', attributes: ['id', 'username', 'phone'] }
+          ]
+        });
 
         if (!chat) {
           return socket.emit('error', { message: 'Chat not found' });
@@ -78,8 +85,8 @@ const initializeSocket = (server) => {
 
         // Verify user has access to this chat
         const isAuthorized =
-          chat.user_id._id.toString() === socket.userId ||
-          (chat.admin_id && chat.admin_id._id.toString() === socket.userId) ||
+          String(chat.user_id) === socket.userId ||
+          (chat.admin_id && String(chat.admin_id) === socket.userId) ||
           ['admin', 'superadmin'].includes(socket.userRole);
 
         if (!isAuthorized) {
@@ -90,10 +97,24 @@ const initializeSocket = (server) => {
         socket.currentChatId = chatId;
 
         // Mark messages as read
-        await chat.markAsRead(socket.userRole);
+        const readCondition = socket.userRole === 'user'
+          ? { chat_id: chatId, sender_role: { [Op.ne]: 'user' }, read: false }
+          : { chat_id: chatId, sender_role: 'user', read: false };
+
+        await ChatMessage.update(
+          { read: true, read_at: new Date() },
+          { where: readCondition }
+        );
+
+        // Get chat messages
+        const messages = await ChatMessage.findAll({
+          where: { chat_id: chatId },
+          include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'phone'] }],
+          order: [['created_at', 'ASC']]
+        });
 
         // Send chat history
-        socket.emit('chat-history', { chat });
+        socket.emit('chat-history', { chat, messages });
 
         logger.info(`User ${socket.username} joined chat ${chatId}`);
       } catch (error) {
@@ -107,7 +128,7 @@ const initializeSocket = (server) => {
       try {
         const { chatId, message, messageType, attachmentUrl } = data;
 
-        const chat = await Chat.findById(chatId);
+        const chat = await Chat.findByPk(chatId);
 
         if (!chat) {
           return socket.emit('error', { message: 'Chat not found' });
@@ -115,32 +136,36 @@ const initializeSocket = (server) => {
 
         // Verify user has access
         const isAuthorized =
-          chat.user_id.toString() === socket.userId ||
-          (chat.admin_id && chat.admin_id.toString() === socket.userId) ||
+          String(chat.user_id) === socket.userId ||
+          (chat.admin_id && String(chat.admin_id) === socket.userId) ||
           ['admin', 'superadmin'].includes(socket.userRole);
 
         if (!isAuthorized) {
           return socket.emit('error', { message: 'Unauthorized' });
         }
 
-        // Add message to chat
-        await chat.addMessage(
-          socket.userId,
-          socket.userRole,
+        // Create message
+        const newMessage = await ChatMessage.create({
+          chat_id: chatId,
+          sender_id: parseInt(socket.userId),
+          sender_role: socket.userRole,
           message,
-          messageType || 'text',
-          attachmentUrl
-        );
+          message_type: messageType || 'text',
+          attachment_url: attachmentUrl || null
+        });
 
-        const populatedChat = await Chat.findById(chatId)
-          .populate('user_id admin_id');
+        // Update chat last_message_at
+        await chat.update({ last_message_at: new Date() });
 
-        const newMessage = populatedChat.messages[populatedChat.messages.length - 1];
+        // Fetch the message with sender info
+        const populatedMessage = await ChatMessage.findByPk(newMessage.id, {
+          include: [{ model: User, as: 'sender', attributes: ['id', 'username', 'phone'] }]
+        });
 
         // Emit to chat room
         io.to(`chat-${chatId}`).emit('new-message', {
           chatId,
-          message: newMessage,
+          message: populatedMessage,
           sender: {
             id: socket.userId,
             username: socket.username,
@@ -195,14 +220,17 @@ const initializeSocket = (server) => {
           return socket.emit('error', { message: 'Unauthorized' });
         }
 
-        const chat = await Chat.findByIdAndUpdate(
-          chatId,
-          {
-            admin_id: socket.userId,
-            status: 'assigned'
-          },
-          { new: true }
-        ).populate('user_id admin_id');
+        await Chat.update(
+          { admin_id: parseInt(socket.userId), status: 'assigned' },
+          { where: { id: chatId } }
+        );
+
+        const chat = await Chat.findByPk(chatId, {
+          include: [
+            { model: User, as: 'user', attributes: ['id', 'username', 'phone'] },
+            { model: User, as: 'admin', attributes: ['id', 'username', 'phone'] }
+          ]
+        });
 
         io.to('admin-room').emit('chat-assigned', { chat });
         io.to(`chat-${chatId}`).emit('chat-updated', { chat });
@@ -227,11 +255,14 @@ const initializeSocket = (server) => {
         if (rating) updateData.rating = rating;
         if (feedback) updateData.feedback = feedback;
 
-        const chat = await Chat.findByIdAndUpdate(
-          chatId,
-          updateData,
-          { new: true }
-        ).populate('user_id admin_id');
+        await Chat.update(updateData, { where: { id: chatId } });
+
+        const chat = await Chat.findByPk(chatId, {
+          include: [
+            { model: User, as: 'user', attributes: ['id', 'username', 'phone'] },
+            { model: User, as: 'admin', attributes: ['id', 'username', 'phone'] }
+          ]
+        });
 
         io.to(`chat-${chatId}`).emit('chat-closed', { chat });
         io.to('admin-room').emit('chat-closed', { chatId });
@@ -250,13 +281,23 @@ const initializeSocket = (server) => {
           return socket.emit('error', { message: 'Unauthorized' });
         }
 
-        const stats = await Chat.getAdminStats();
-        const activeChats = await Chat.find({
-          status: { $in: ['open', 'assigned'] }
-        })
-          .populate('user_id')
-          .sort({ priority: -1, last_message_at: -1 })
-          .limit(20);
+        const openChats = await Chat.count({ where: { status: 'open' } });
+        const assignedChats = await Chat.count({ where: { status: 'assigned' } });
+        const closedChats = await Chat.count({ where: { status: 'closed' } });
+
+        const stats = {
+          open: openChats,
+          assigned: assignedChats,
+          closed: closedChats,
+          total: openChats + assignedChats + closedChats
+        };
+
+        const activeChats = await Chat.findAll({
+          where: { status: { [Op.in]: ['open', 'assigned'] } },
+          include: [{ model: User, as: 'user', attributes: ['id', 'username', 'phone'] }],
+          order: [['priority', 'DESC'], ['last_message_at', 'DESC']],
+          limit: 20
+        });
 
         socket.emit('admin-stats', { stats, activeChats });
       } catch (error) {

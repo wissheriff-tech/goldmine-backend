@@ -15,7 +15,7 @@ router.post('/', authenticate, async (req, res) => {
     // Check if user has an open chat already
     const existingChat = await Chat.findOne({
       where: {
-        user_id: req.user.userId,
+        user_id: req.user.id,
         status: { [Op.in]: ['open', 'assigned'] }
       }
     });
@@ -29,7 +29,7 @@ router.post('/', authenticate, async (req, res) => {
 
     // Create new chat
     const chat = await Chat.create({
-      user_id: req.user.userId,
+      user_id: req.user.id,
       subject: subject || 'General Inquiry',
       category: category || 'general',
       priority: priority || 'medium',
@@ -40,7 +40,7 @@ router.post('/', authenticate, async (req, res) => {
     if (message) {
       await ChatMessage.create({
         chat_id: chat.id,
-        sender_id: req.user.userId,
+        sender_id: req.user.id,
         sender_role: req.user.role,
         message
       });
@@ -64,7 +64,7 @@ router.post('/', authenticate, async (req, res) => {
       logger.warn('Socket notification failed:', socketError);
     }
 
-    logger.info(`New chat created by user ${req.user.userId}`);
+    logger.info(`New chat created by user ${req.user.id}`);
 
     res.status(201).json({
       message: 'Chat created successfully',
@@ -81,7 +81,7 @@ router.get('/my-chats', authenticate, async (req, res) => {
   try {
     const { status, limit = 20, offset = 0 } = req.query;
 
-    const where = { user_id: req.user.userId };
+    const where = { user_id: req.user.id };
 
     if (status) {
       where.status = status;
@@ -187,8 +187,8 @@ router.get('/:chatId', authenticate, async (req, res) => {
 
     // Verify user has access
     const isAuthorized =
-      chat.user_id.toString() === req.user.userId.toString() ||
-      (chat.admin_id && chat.admin_id.toString() === req.user.userId.toString()) ||
+      chat.user_id === req.user.id ||
+      (chat.admin_id && chat.admin_id === req.user.id) ||
       ['admin', 'superadmin'].includes(req.user.role);
 
     if (!isAuthorized) {
@@ -268,7 +268,7 @@ router.patch('/:chatId', authenticate, authorizeRoles('admin', 'superadmin'), as
       logger.warn('Socket notification failed:', socketError);
     }
 
-    logger.info(`Chat ${chatId} updated by admin ${req.user.userId}`);
+    logger.info(`Chat ${chatId} updated by admin ${req.user.id}`);
 
     res.json({
       message: 'Chat updated successfully',
@@ -288,7 +288,7 @@ router.post('/:chatId/assign', authenticate, authorizeRoles('admin', 'superadmin
 
     const [affectedCount] = await Chat.update(
       {
-        admin_id: admin_id || req.user.userId,
+        admin_id: admin_id || req.user.id,
         status: 'assigned'
       },
       { where: { id: chatId } }
@@ -314,7 +314,7 @@ router.post('/:chatId/assign', authenticate, authorizeRoles('admin', 'superadmin
       logger.warn('Socket notification failed:', socketError);
     }
 
-    logger.info(`Chat ${chatId} assigned to admin ${admin_id || req.user.userId}`);
+    logger.info(`Chat ${chatId} assigned to admin ${admin_id || req.user.id}`);
 
     res.json({
       message: 'Chat assigned successfully',
@@ -344,8 +344,8 @@ router.post('/:chatId/messages', authenticate, async (req, res) => {
 
     // Verify user has access
     const isAuthorized =
-      chat.user_id.toString() === req.user.userId.toString() ||
-      (chat.admin_id && chat.admin_id.toString() === req.user.userId.toString()) ||
+      chat.user_id === req.user.id ||
+      (chat.admin_id && chat.admin_id === req.user.id) ||
       ['admin', 'superadmin'].includes(req.user.role);
 
     if (!isAuthorized) {
@@ -355,7 +355,7 @@ router.post('/:chatId/messages', authenticate, async (req, res) => {
     // Create the message in the ChatMessage table
     const newMessage = await ChatMessage.create({
       chat_id: chatId,
-      sender_id: req.user.userId,
+      sender_id: req.user.id,
       sender_role: req.user.role,
       message,
       message_type: messageType || 'text',
@@ -385,7 +385,7 @@ router.post('/:chatId/messages', authenticate, async (req, res) => {
       if (req.user.role === 'user') {
         io.to('admin-room').emit('new-user-message', {
           chatId,
-          userId: req.user.userId,
+          userId: req.user.id,
           message: message.substring(0, 100)
         });
       }
@@ -393,7 +393,7 @@ router.post('/:chatId/messages', authenticate, async (req, res) => {
       logger.warn('Socket notification failed:', socketError);
     }
 
-    logger.info(`Message added to chat ${chatId} by ${req.user.userId}`);
+    logger.info(`Message added to chat ${chatId} by ${req.user.id}`);
 
     res.status(201).json({
       message: 'Message sent successfully',
@@ -419,7 +419,7 @@ router.post('/:chatId/close', authenticate, async (req, res) => {
 
     // Verify user has access
     const isAuthorized =
-      chat.user_id.toString() === req.user.userId.toString() ||
+      chat.user_id === req.user.id ||
       ['admin', 'superadmin'].includes(req.user.role);
 
     if (!isAuthorized) {

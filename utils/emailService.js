@@ -201,7 +201,7 @@ class EmailService {
 
             <div style="background: #f0fdf4; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10b981;">
               <p style="margin: 5px 0; color: #333;"><strong>Amount:</strong> ${transaction.amount_NSL} NSL (${transaction.amount_usdt} USDT)</p>
-              <p style="margin: 5px 0; color: #333;"><strong>Transaction ID:</strong> ${transaction._id}</p>
+              <p style="margin: 5px 0; color: #333;"><strong>Transaction ID:</strong> ${transaction.id}</p>
               <p style="margin: 5px 0; color: #333;"><strong>Status:</strong> <span style="color: #10b981; font-weight: bold;">Approved</span></p>
             </div>
 

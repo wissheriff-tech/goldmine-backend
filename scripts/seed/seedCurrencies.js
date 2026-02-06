@@ -1,5 +1,5 @@
-const mongoose = require('mongoose');
 const dotenv = require('dotenv');
+const { sequelize } = require('../../config/database');
 const ExchangeRate = require('../../models/ExchangeRate');
 const binanceService = require('../../services/binanceService');
 
@@ -100,48 +100,44 @@ const currencies = [
 
 async function seedCurrencies() {
   try {
-    // Connect to MongoDB
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/salonmoney', {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
-
-    console.log('Connected to MongoDB');
+    // Verify database connection
+    await sequelize.authenticate();
+    console.log('Connected to MySQL');
 
     // Clear existing currencies
-    await ExchangeRate.deleteMany({});
+    await ExchangeRate.destroy({ where: {} });
     console.log('Cleared existing currencies');
 
     // Insert currencies
-    const insertedCurrencies = await ExchangeRate.insertMany(currencies);
+    const insertedCurrencies = await ExchangeRate.bulkCreate(currencies);
     console.log(`Inserted ${insertedCurrencies.length} currencies`);
 
     // Try to update rates from Binance if configured
     if (binanceService.isConfigured) {
       console.log('\nUpdating exchange rates from Binance...');
       const result = await binanceService.updateExchangeRates();
-      console.log(`✓ Updated ${result.updated} rates from Binance`);
-      console.log(`✗ Failed to update ${result.failed} rates`);
+      console.log(`Updated ${result.updated} rates from Binance`);
+      console.log(`Failed to update ${result.failed} rates`);
     } else {
-      console.log('\n⚠ Binance API not configured. Using default rates.');
+      console.log('\nBinance API not configured. Using default rates.');
       console.log('To enable live rates, set BINANCE_API_KEY and BINANCE_SECRET_KEY in your .env file');
     }
 
     // Display inserted currencies
     console.log('\n=== Seeded Currencies ===');
-    const allCurrencies = await ExchangeRate.find({}).sort({ currency_code: 1 });
+    const allCurrencies = await ExchangeRate.findAll({ order: [['currency_code', 'ASC']] });
     allCurrencies.forEach(curr => {
       const activeRate = curr.getActiveRate();
       console.log(`${curr.currency_code.padEnd(5)} ${curr.currency_symbol.padEnd(3)} | 1 USD = ${activeRate.rate.toFixed(2)} ${curr.currency_code} | ${curr.currency_name}`);
     });
 
-    console.log('\n✓ Currency seeding completed successfully!');
+    console.log('\nCurrency seeding completed successfully!');
 
-    await mongoose.connection.close();
+    await sequelize.close();
     process.exit(0);
   } catch (error) {
     console.error('Error seeding currencies:', error);
-    await mongoose.connection.close();
+    await sequelize.close();
     process.exit(1);
   }
 }
