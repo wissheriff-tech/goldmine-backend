@@ -2,18 +2,24 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Ensure all upload directories exist
+// Check if running on Vercel (read-only file system)
+const isVercel = process.env.VERCEL === '1';
+
+// Upload directories (only used when NOT on Vercel)
 const uploadDirs = {
   profiles: path.join(__dirname, '../uploads/profiles'),
   payments: path.join(__dirname, '../uploads/payments'),
   kyc: path.join(__dirname, '../uploads/kyc')
 };
 
-Object.values(uploadDirs).forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-});
+// Only create directories if NOT on Vercel
+if (!isVercel) {
+  Object.values(uploadDirs).forEach(dir => {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+}
 
 // File filter for images only
 const imageFilter = (req, file, cb) => {
@@ -41,39 +47,49 @@ const documentFilter = (req, file, cb) => {
   }
 };
 
-// Configure storage for profile photos
-const profileStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDirs.profiles);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'profile-' + req.user.id + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
+// Use memory storage on Vercel, disk storage otherwise
+let profileStorage, paymentStorage, kycStorage;
 
-// Configure storage for payment proofs
-const paymentStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDirs.payments);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'payment-' + req.user.id + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
+if (isVercel) {
+  // Memory storage for Vercel (files stored in buffer, not on disk)
+  profileStorage = multer.memoryStorage();
+  paymentStorage = multer.memoryStorage();
+  kycStorage = multer.memoryStorage();
+} else {
+  // Configure disk storage for profile photos
+  profileStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, uploadDirs.profiles);
+    },
+    filename: function (req, file, cb) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, 'profile-' + req.user.id + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+  });
 
-// Configure storage for KYC documents
-const kycStorage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, uploadDirs.kyc);
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const docType = file.fieldname; // e.g., 'id_front', 'id_back', 'selfie'
-    cb(null, `kyc-${req.user.id}-${docType}-${uniqueSuffix}${path.extname(file.originalname)}`);
-  }
-});
+  // Configure disk storage for payment proofs
+  paymentStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, uploadDirs.payments);
+    },
+    filename: function (req, file, cb) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      cb(null, 'payment-' + req.user.id + '-' + uniqueSuffix + path.extname(file.originalname));
+    }
+  });
+
+  // Configure disk storage for KYC documents
+  kycStorage = multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, uploadDirs.kyc);
+    },
+    filename: function (req, file, cb) {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const docType = file.fieldname; // e.g., 'id_front', 'id_back', 'selfie'
+      cb(null, `kyc-${req.user.id}-${docType}-${uniqueSuffix}${path.extname(file.originalname)}`);
+    }
+  });
+}
 
 // Create multer upload instances
 const profileUpload = multer({
