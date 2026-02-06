@@ -3,7 +3,6 @@ const http = require('http');
 const cors = require('cors');
 const compression = require('compression');
 const dotenv = require('dotenv');
-const cron = require('node-cron');
 const logger = require('./utils/logger');
 
 // Security middleware
@@ -17,6 +16,9 @@ const {
 
 dotenv.config();
 
+// Check if running on Vercel (serverless)
+const isVercel = process.env.VERCEL === '1';
+
 const app = express();
 const server = http.createServer(app);
 
@@ -28,7 +30,9 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:3002',
-  process.env.FRONTEND_URL
+  process.env.FRONTEND_URL,
+  // Allow Vercel preview deployments
+  /\.vercel\.app$/
 ].filter(Boolean);
 
 const corsOptions = {
@@ -36,7 +40,15 @@ const corsOptions = {
     // Allow requests with no origin (mobile apps, Postman, etc.)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    // Check if origin matches any allowed origin (string or regex)
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed instanceof RegExp) {
+        return allowed.test(origin);
+      }
+      return allowed === origin;
+    });
+
+    if (isAllowed) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -84,10 +96,12 @@ const { sequelize } = require('./models');
   }
 })();
 
-// Initialize Socket.io
-const { initializeSocket } = require('./config/socket');
-initializeSocket(server);
-logger.info('Socket.io initialized');
+// Initialize Socket.io (skip on Vercel - serverless doesn't support WebSockets)
+if (!isVercel) {
+  const { initializeSocket } = require('./config/socket');
+  initializeSocket(server);
+  logger.info('Socket.io initialized');
+}
 
 // Import Routes
 const authRoutes = require('./routes/auth');
@@ -133,8 +147,12 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Cron Job: Daily Income (Enhanced with validity checking)
-cron.schedule('0 0 * * *', async () => {
+// Cron Jobs (skip on Vercel - use Vercel Cron instead)
+if (!isVercel) {
+  const cron = require('node-cron');
+
+  // Cron Job: Daily Income (Enhanced with validity checking)
+  cron.schedule('0 0 * * *', async () => {
   try {
     logger.info('Running daily income cron job...');
     const { User, UserProduct, Product, Transaction } = require('./models');
@@ -287,7 +305,8 @@ cron.schedule('0 2 * * *', async () => {
   } catch (error) {
     logger.error('Error in cleanup cron:', error);
   }
-});
+  });
+} // End of if (!isVercel) block for cron jobs
 
 // 404 Handler - Must be after all routes
 app.use((req, res) => {
@@ -362,10 +381,13 @@ app.use((err, req, res, next) => {
   });
 });
 
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-  logger.info(`Socket.io listening on port ${PORT}`);
-});
+// Only start server if not running on Vercel (Vercel handles this automatically)
+if (!isVercel) {
+  const PORT = process.env.PORT || 5000;
+  server.listen(PORT, () => {
+    logger.info(`Server running on port ${PORT}`);
+    logger.info(`Socket.io listening on port ${PORT}`);
+  });
+}
 
 module.exports = app;
