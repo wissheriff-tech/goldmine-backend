@@ -1,8 +1,6 @@
 const dotenv = require('dotenv');
 const { sequelize } = require('../../config/database');
 const ExchangeRate = require('../../models/ExchangeRate');
-const binanceService = require('../../services/binanceService');
-
 dotenv.config();
 
 const currencies = [
@@ -112,16 +110,7 @@ async function seedCurrencies() {
     const insertedCurrencies = await ExchangeRate.bulkCreate(currencies);
     console.log(`Inserted ${insertedCurrencies.length} currencies`);
 
-    // Try to update rates from Binance if configured
-    if (binanceService.isConfigured) {
-      console.log('\nUpdating exchange rates from Binance...');
-      const result = await binanceService.updateExchangeRates();
-      console.log(`Updated ${result.updated} rates from Binance`);
-      console.log(`Failed to update ${result.failed} rates`);
-    } else {
-      console.log('\nBinance API not configured. Using default rates.');
-      console.log('To enable live rates, set BINANCE_API_KEY and BINANCE_SECRET_KEY in your .env file');
-    }
+    console.log('\nUsing default static exchange rates.');
 
     // Display inserted currencies
     console.log('\n=== Seeded Currencies ===');

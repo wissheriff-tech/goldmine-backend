@@ -118,7 +118,7 @@ const batchRoutes = require('./routes/batch');
 const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
 const chatRoutes = require('./routes/chat');
-const binanceRoutes = require('./routes/binance');
+const depositRoutes = require('./routes/deposit');
 
 // Register Routes
 app.use('/api/auth', authRoutes);
@@ -135,7 +135,12 @@ app.use('/api/batch', batchRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/chat', chatRoutes);
-app.use('/api/binance', binanceRoutes);
+app.use('/api/deposit', depositRoutes);
+
+// Root API info
+app.get('/api', (req, res) => {
+  res.json({ name: 'SalonMoney API', status: 'running', version: '1.0.0' });
+});
 
 // Health Check
 app.get('/api/health', async (req, res) => {
@@ -204,23 +209,6 @@ if (!isVercel) {
     logger.info(`Daily income cron completed: ${totalUsersProcessed} users, ${totalIncomeGenerated.toLocaleString()} NSL total`);
   } catch (error) {
     logger.error('Error in daily income cron:', error);
-  }
-});
-
-// Cron Job: Update Exchange Rates (Runs every 4 hours)
-cron.schedule('0 */4 * * *', async () => {
-  try {
-    logger.info('Running exchange rate update cron job...');
-    const binanceService = require('./services/binanceService');
-
-    if (binanceService.isConfigured) {
-      const result = await binanceService.updateExchangeRates();
-      logger.info(`Exchange rates updated: ${result.updated} currencies updated, ${result.failed} failed`);
-    } else {
-      logger.warn('Binance API not configured. Skipping exchange rate update.');
-    }
-  } catch (error) {
-    logger.error('Error in exchange rate update cron:', error);
   }
 });
 

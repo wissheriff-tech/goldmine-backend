@@ -126,44 +126,8 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     allowNull: true
   },
-  googleId: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
-  facebookId: {
-    type: DataTypes.STRING,
-    allowNull: true
-  },
-  authProvider: {
-    type: DataTypes.ENUM('local', 'google', 'facebook'),
-    defaultValue: 'local'
-  },
   profile_photo: {
     type: DataTypes.STRING(500),
-    allowNull: true,
-    defaultValue: null
-  },
-  binance_account_id: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    defaultValue: null
-  },
-  binance_wallet_address: {
-    type: DataTypes.STRING,
-    allowNull: true,
-    defaultValue: null
-  },
-  binance_wallet_verified: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false
-  },
-  binance_wallet_verified_by: {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-    defaultValue: null
-  },
-  binance_wallet_verified_at: {
-    type: DataTypes.DATE,
     allowNull: true,
     defaultValue: null
   },

@@ -1,47 +1,49 @@
-/**
- * Database Configuration
- * MySQL connection via Sequelize
- */
-
+const path = require('path');
 const { Sequelize } = require('sequelize');
 const logger = require('../utils/logger');
 
-const databaseUrl = process.env.DATABASE_URL || 'mysql://root:password@localhost:3306/salonmoney';
+const isProd = process.env.NODE_ENV === 'production';
 
-const sequelize = new Sequelize(databaseUrl, {
-  dialect: 'mysql',
-  logging: (msg) => logger.debug(msg),
-  pool: {
-    max: 10,
-    min: 2,
-    acquire: 30000,
-    idle: 10000
-  },
-  dialectOptions: {
-    connectTimeout: 10000
-  },
-  define: {
-    timestamps: true,
-    underscored: false
-  }
-});
+let sequelize;
+
+if (isProd && process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('postgres')) {
+  // Production: PostgreSQL (Neon, Supabase, Railway, etc.)
+  sequelize = new Sequelize(process.env.DATABASE_URL, {
+    dialect: 'postgres',
+    protocol: 'postgres',
+    logging: false,
+    dialectOptions: {
+      ssl: { require: true, rejectUnauthorized: false }
+    },
+    define: { timestamps: true, underscored: false }
+  });
+} else {
+  // Development: SQLite (zero config, file-based)
+  const dbPath = process.env.SQLITE_PATH || path.join(__dirname, '..', 'data', 'salonmoney.db');
+  sequelize = new Sequelize({
+    dialect: 'sqlite',
+    storage: dbPath,
+    logging: false,
+    define: { timestamps: true, underscored: false }
+  });
+  logger.info(`SQLite database: ${dbPath}`);
+}
 
 const connectDatabase = async () => {
   try {
     await sequelize.authenticate();
-    logger.info(`MySQL Connected: ${sequelize.config.host}`);
-    logger.info(`Database Name: ${sequelize.config.database}`);
+    await sequelize.sync({ alter: true });
+    logger.info('Database connected and synced');
     return sequelize;
   } catch (error) {
-    logger.error('MySQL connection failed:', error.message);
+    logger.error('Database connection failed:', error.message);
     process.exit(1);
   }
 };
 
-// Graceful shutdown
 process.on('SIGINT', async () => {
   await sequelize.close();
-  logger.info('MySQL connection closed through app termination');
+  logger.info('Database connection closed');
   process.exit(0);
 });
 

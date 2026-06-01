@@ -9,7 +9,6 @@ const Product = require('../models/Product');
 const UserProduct = require('../models/UserProduct');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
-const binanceService = require('../services/binanceService');
 const { profileUpload, paymentUpload, kycUpload } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs');
@@ -103,33 +102,6 @@ router.get('/transactions', authenticate, async (req, res) => {
   }
 });
 
-// Generate deposit address
-router.post('/generate-deposit-address', authenticate, async (req, res) => {
-  try {
-    const { amount_NSL } = req.body;
-    const user = await User.findByPk(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Generate unique deposit address via Binance
-    const depositInfo = await binanceService.createDepositAddress(user.id, 'USDT');
-
-    logger.info(`Deposit address generated for user ${user.phone || user.id}: ${depositInfo.address}`);
-
-    res.json({
-      address: depositInfo.address,
-      network: depositInfo.network,
-      currency: depositInfo.currency,
-      amount_NSL,
-      amount_usdt: (amount_NSL / parseInt(process.env.NSL_TO_USDT_RECHARGE || 25)).toFixed(2)
-    });
-  } catch (error) {
-    logger.error('Deposit address generation error:', error);
-    res.status(500).json({ message: 'Error generating deposit address', error: error.message });
-  }
-});
 
 // Request recharge
 router.post('/recharge', authenticate, transactionLimiter, validateRecharge, async (req, res) => {
