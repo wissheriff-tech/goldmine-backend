@@ -48,3 +48,10 @@ nul
 # Cache
 .cache/
 .eslintcache
+
+# SQLite database
+data/
+uploads/
+*.db
+*.sqlite
+.vercel

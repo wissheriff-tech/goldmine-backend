@@ -200,7 +200,7 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin']), admi
 router.patch('/users/:id/vip', authenticate, authorize(['superadmin']), adminLimiter, validateUpdateVIP, async (req, res) => {
   try {
     const { vip_level } = req.body;
-    const validLevels = ['VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9', 'none'];
+    const validLevels = ['none', 'VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'];
 
     if (!validLevels.includes(vip_level)) {
       return res.status(400).json({ message: 'Invalid VIP level' });

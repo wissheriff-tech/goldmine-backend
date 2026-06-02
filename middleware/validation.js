@@ -290,7 +290,7 @@ const updateStatusSchema = Joi.object({
 
 const updateVIPSchema = Joi.object({
   vip_level: Joi.string()
-    .valid('none', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9')
+    .valid('none', 'VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9')
     .required()
 });
 

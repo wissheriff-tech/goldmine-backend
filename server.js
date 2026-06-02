@@ -25,14 +25,10 @@ const server = http.createServer(app);
 // Trust proxy - Important for rate limiting behind reverse proxies
 app.set('trust proxy', 1);
 
-// CORS Configuration - Allow frontend to access backend
+// CORS Configuration
 const allowedOrigins = [
   'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:3002',
   process.env.FRONTEND_URL,
-  // Allow Vercel preview deployments
-  /\.vercel\.app$/
 ].filter(Boolean);
 
 const corsOptions = {
@@ -142,14 +138,56 @@ app.get('/api', (req, res) => {
   res.json({ name: 'SalonMoney API', status: 'running', version: '1.0.0' });
 });
 
-// Health Check
-app.get('/api/health', async (req, res) => {
+
+// Seed products (admin-only, idempotent)
+app.post('/api/admin/seed-products', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: 'Unauthorized' });
   try {
-    await sequelize.authenticate();
-    res.json({ status: 'Server is running', database: 'connected', timestamp: new Date() });
-  } catch (err) {
-    res.status(503).json({ status: 'Server is running', database: 'disconnected', timestamp: new Date() });
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET);
+    if (decoded.role !== 'superadmin') return res.status(403).json({ message: 'Forbidden' });
+  } catch { return res.status(401).json({ message: 'Invalid token' }); }
+
+  const Product = require('./models/Product');
+  const NSL_RATE = parseInt(process.env.NSL_TO_USDT_RECHARGE || 23);
+  const plans = [
+    { name: 'VIP0', price_NSL: 500,     daily_income_NSL: 15,    description: 'Starter package — begin your journey with minimal risk.' },
+    { name: 'VIP1', price_NSL: 1000,    daily_income_NSL: 40,    description: 'Entry-level package with steady daily returns.' },
+    { name: 'VIP2', price_NSL: 3000,    daily_income_NSL: 150,   description: 'Enhanced package with better returns and faster processing.' },
+    { name: 'VIP3', price_NSL: 8000,    daily_income_NSL: 450,   description: 'Premium package with dedicated support.' },
+    { name: 'VIP4', price_NSL: 20000,   daily_income_NSL: 1200,  description: 'Elite package with reduced fees and express withdrawals.' },
+    { name: 'VIP5', price_NSL: 50000,   daily_income_NSL: 3200,  description: 'Platinum package with exclusive promotions.' },
+    { name: 'VIP6', price_NSL: 100000,  daily_income_NSL: 6800,  description: 'Diamond package — zero withdrawal fees.' },
+    { name: 'VIP7', price_NSL: 250000,  daily_income_NSL: 18000, description: 'Royal package with concierge investment service.' },
+    { name: 'VIP8', price_NSL: 500000,  daily_income_NSL: 40000, description: 'Ultimate package with lifetime premium support.' },
+    { name: 'VIP9', price_NSL: 1000000, daily_income_NSL: 85000, description: 'Legend package — the absolute peak.' },
+  ];
+
+  let created = 0, updated = 0;
+  for (const p of plans) {
+    const [, wasCreated] = await Product.upsert({
+      name: p.name, description: p.description,
+      price_NSL: p.price_NSL,
+      price_usdt: (p.price_NSL / NSL_RATE).toFixed(2),
+      daily_income_NSL: p.daily_income_NSL,
+      validity_days: 60, active: true
+    });
+    wasCreated ? created++ : updated++;
   }
+  res.json({ message: 'Products seeded', created, updated, total: plans.length });
+});
+
+// Health Check — always return 200 so Render considers the service healthy
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'connecting';
+  try {
+    await Promise.race([
+      sequelize.authenticate().then(() => { dbStatus = 'connected'; }),
+      new Promise(r => setTimeout(r, 3000)) // 3s timeout
+    ]);
+  } catch { dbStatus = 'disconnected'; }
+  res.json({ status: 'Server is running', database: dbStatus, timestamp: new Date() });
 });
 
 // Cron Jobs (skip on Vercel - use Vercel Cron instead)
@@ -367,6 +405,14 @@ app.use((err, req, res, next) => {
     message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
+});
+
+// Catch unhandled errors — prevent silent crashes
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught Exception:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled Rejection:', reason);
 });
 
 // Only start server if not running on Vercel (Vercel handles this automatically)
