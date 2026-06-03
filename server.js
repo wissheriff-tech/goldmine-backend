@@ -19,6 +19,10 @@ const { authenticate } = require('./middleware/auth');
 
 dotenv.config();
 
+if (!process.env.SUPER_ADMIN_PASSWORD) {
+  throw new Error('SUPER_ADMIN_PASSWORD env var is required — refusing to start without it');
+}
+
 // Check if running on Vercel (serverless)
 const isVercel = process.env.VERCEL === '1';
 
@@ -99,7 +103,7 @@ if (!isVercel) {
           username: 'superadmin',
           phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
           email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
-          password_hash: process.env.SUPER_ADMIN_PASSWORD || 'Admin@123456',
+          password_hash: process.env.SUPER_ADMIN_PASSWORD,
           role: 'superadmin',
           referral_code: 'ADMIN00001',
           status: 'active',
@@ -152,7 +156,7 @@ if (isVercel) {
           username: 'superadmin',
           phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
           email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
-          password_hash: process.env.SUPER_ADMIN_PASSWORD || 'Admin@123456',
+          password_hash: process.env.SUPER_ADMIN_PASSWORD,
           role: 'superadmin',
           referral_code: 'ADMIN00001',
           status: 'active',

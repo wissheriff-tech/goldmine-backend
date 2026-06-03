@@ -43,6 +43,7 @@ coverage/
 # Temporary Files
 *.tmp
 *.temp
+*.bak
 nul
 
 # Cache
