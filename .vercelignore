@@ -1,0 +1,8 @@
+node_modules/sharp
+node_modules/sqlite3
+node_modules/better-sqlite3
+data/
+logs/
+__tests__/
+scripts/
+*.test.js
