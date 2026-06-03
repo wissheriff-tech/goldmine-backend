@@ -1,5 +1,5 @@
-const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Session = require('../models/Session');
 const logger = require('../utils/logger');
 
 const authenticate = async (req, res, next) => {
@@ -10,12 +10,24 @@ const authenticate = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const user = await User.findByPk(decoded.id);
+    const session = await Session.findOne({
+      where: { access_token: token, is_active: true }
+    });
+
+    if (!session || new Date() > session.expires_at) {
+      if (session && new Date() > session.expires_at) {
+        await session.update({ is_active: false });
+      }
+      return res.status(401).json({ message: 'Invalid or expired token' });
+    }
+
+    const user = await User.findByPk(session.user_id);
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }
+
+    await session.update({ last_activity: new Date() });
 
     req.user = {
       id: user.id,

@@ -11,8 +11,13 @@ const Session = sequelize.define('Session', {
     type: DataTypes.INTEGER,
     allowNull: false
   },
+  access_token: {
+    type: DataTypes.STRING(128),
+    allowNull: true,
+    unique: true
+  },
   refresh_token: {
-    type: DataTypes.STRING(500),
+    type: DataTypes.STRING(128),
     allowNull: false,
     unique: true
   },

@@ -1,4 +1,3 @@
-const path = require('path');
 const { Sequelize } = require('sequelize');
 const logger = require('../utils/logger');
 
@@ -6,25 +5,32 @@ const isProd = process.env.NODE_ENV === 'production';
 
 let sequelize;
 
-if (isProd && process.env.DATABASE_URL && process.env.DATABASE_URL.startsWith('postgres')) {
-  // Production: PostgreSQL (Neon, Supabase, Railway, etc.)
-  sequelize = new Sequelize(process.env.DATABASE_URL, {
+if (isProd) {
+  // Production: always PostgreSQL — never load sqlite3 on Vercel
+  const dbUrl = process.env.DATABASE_URL || '';
+  sequelize = new Sequelize(dbUrl, {
     dialect: 'postgres',
     protocol: 'postgres',
     logging: false,
     dialectOptions: {
-      ssl: { require: true, rejectUnauthorized: false }
+      ssl: { require: true, rejectUnauthorized: false },
     },
-    define: { timestamps: true, underscored: false }
+    define: { timestamps: true, underscored: false },
+    pool: {
+      afterCreate: (conn, done) => {
+        conn.query('SET search_path TO backend;', (err) => done(err, conn));
+      },
+    },
   });
 } else {
   // Development: SQLite (zero config, file-based)
+  const path = require('path');
   const dbPath = process.env.SQLITE_PATH || path.join(__dirname, '..', 'data', 'salonmoney.db');
   sequelize = new Sequelize({
     dialect: 'sqlite',
     storage: dbPath,
     logging: false,
-    define: { timestamps: true, underscored: false }
+    define: { timestamps: true, underscored: false },
   });
   logger.info(`SQLite database: ${dbPath}`);
 }

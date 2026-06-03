@@ -173,6 +173,10 @@ const requestLogger = (req, res, next) => {
 const validateContentType = (req, res, next) => {
   if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
     const contentType = req.get('content-type');
+    const contentLength = parseInt(req.get('content-length') || '0', 10);
+
+    // Allow empty-body requests (no content to validate)
+    if (!contentLength && !req.readable) return next();
 
     if (!contentType || (!contentType.includes('application/json') && !contentType.includes('multipart/form-data'))) {
       return res.status(400).json({

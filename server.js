@@ -1,3 +1,5 @@
+// Force pg into ncc bundle
+require("pg");
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -13,6 +15,7 @@ const {
   validateContentType,
   preventParameterPollution
 } = require('./middleware/security');
+const { authenticate } = require('./middleware/auth');
 
 dotenv.config();
 
@@ -79,18 +82,35 @@ app.use('/uploads', (req, res, next) => {
 app.use('/api/', globalLimiter);
 
 // Database Connection
-const { sequelize } = require('./models');
+const { sequelize, User } = require('./models');
 
-(async () => {
-  try {
-    await sequelize.authenticate();
-    logger.info('MySQL connected');
-    await sequelize.sync();
-    logger.info('Database tables synced');
-  } catch (err) {
-    logger.error('MySQL connection error:', err);
-  }
-})();
+// On Vercel: skip startup DB sync (too slow for cold start). Tables are synced lazily.
+// On server: sync on startup as normal.
+if (!isVercel) {
+  (async () => {
+    try {
+      await sequelize.authenticate();
+      logger.info('Database connected');
+      await sequelize.sync({ alter: false, force: false });
+      logger.info('Database tables synced');
+      const admin = await User.findOne({ where: { username: 'superadmin' } });
+      if (!admin) {
+        await User.create({
+          username: 'superadmin',
+          phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
+          email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
+          password_hash: process.env.SUPER_ADMIN_PASSWORD || 'Admin@123456',
+          role: 'superadmin',
+          referral_code: 'ADMIN00001',
+          status: 'active',
+        });
+        logger.info('Superadmin seeded');
+      }
+    } catch (err) {
+      logger.error('Database init error:', err.message);
+    }
+  })();
+}
 
 // Initialize Socket.io (skip on Vercel - serverless doesn't support WebSockets)
 if (!isVercel) {
@@ -116,6 +136,51 @@ const securityRoutes = require('./routes/security');
 const chatRoutes = require('./routes/chat');
 const depositRoutes = require('./routes/deposit');
 
+// On Vercel: sync DB + seed admin on first request (lazy init)
+let dbReady = false;
+if (isVercel) {
+  app.use(async (req, res, next) => {
+    if (dbReady) return next();
+    try {
+      await sequelize.authenticate();
+      logger.info('Vercel DB: authenticated');
+      await sequelize.sync({ force: false });
+      logger.info('Vercel DB: synced');
+      const admin = await User.findOne({ where: { username: 'superadmin' } });
+      if (!admin) {
+        await User.create({
+          username: 'superadmin',
+          phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
+          email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
+          password_hash: process.env.SUPER_ADMIN_PASSWORD || 'Admin@123456',
+          role: 'superadmin',
+          referral_code: 'ADMIN00001',
+          status: 'active',
+        });
+      }
+      dbReady = true;
+      logger.info('Vercel DB: ready');
+    } catch (err) {
+      logger.error('Vercel DB init error:', err.message, err.stack?.split('\n')[1]);
+    }
+    next();
+  });
+}
+
+app.get('/api/ping', async (req, res) => {
+  let syncError = null;
+  if (!dbReady) {
+    try {
+      await sequelize.authenticate();
+      await sequelize.sync({ force: false });
+      syncError = 'sync ok';
+    } catch(e) {
+      syncError = e.message.slice(0, 200);
+    }
+  }
+  res.json({ ok: true, env: process.env.NODE_ENV, db: !!process.env.DATABASE_URL, dbReady, isVercel: process.env.VERCEL, syncError });
+});
+
 // Register Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
@@ -140,14 +205,10 @@ app.get('/api', (req, res) => {
 
 
 // Seed products (admin-only, idempotent)
-app.post('/api/admin/seed-products', async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ message: 'Unauthorized' });
-  try {
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(authHeader.split(' ')[1], process.env.JWT_SECRET);
-    if (decoded.role !== 'superadmin') return res.status(403).json({ message: 'Forbidden' });
-  } catch { return res.status(401).json({ message: 'Invalid token' }); }
+app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
+  if (req.user.role !== 'superadmin') return res.status(403).json({ message: 'Forbidden' });
+  next();
+}, async (req, res) => {
 
   const Product = require('./models/Product');
   const NSL_RATE = parseInt(process.env.NSL_TO_USDT_RECHARGE || 23);

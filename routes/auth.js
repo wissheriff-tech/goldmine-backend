@@ -1,11 +1,36 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { User } = require('../models');
+const Session = require('../models/Session');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
+
+const ACCESS_TOKEN_TTL_MS  = parseInt(process.env.ACCESS_TOKEN_TTL_MS  || String(24 * 60 * 60 * 1000));
+const REFRESH_TOKEN_TTL_MS = parseInt(process.env.REFRESH_TOKEN_TTL_MS || String(7  * 24 * 60 * 60 * 1000));
+const REMEMBER_ME_ACCESS_TTL_MS  = 30 * 24 * 60 * 60 * 1000;
+const REMEMBER_ME_REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+const issueTokens = async (user, rememberMe = false, deviceInfo = null) => {
+  const accessToken  = crypto.randomBytes(48).toString('hex');
+  const refreshToken = crypto.randomBytes(48).toString('hex');
+  const now = Date.now();
+  const accessTtl  = rememberMe ? REMEMBER_ME_ACCESS_TTL_MS  : ACCESS_TOKEN_TTL_MS;
+  const refreshTtl = rememberMe ? REMEMBER_ME_REFRESH_TTL_MS : REFRESH_TOKEN_TTL_MS;
+
+  await Session.create({
+    user_id:       user.id,
+    access_token:  accessToken,
+    refresh_token: refreshToken,
+    is_active:     true,
+    last_activity: new Date(now),
+    expires_at:    new Date(now + refreshTtl),
+    device_info:   deviceInfo
+  });
+
+  return { token: accessToken, refreshToken, accessExpiresAt: new Date(now + accessTtl) };
+};
 
 // Validation Middleware
 const {
@@ -162,21 +187,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
     user.last_login = new Date();
     await user.save();
 
-    // Determine token expiry based on rememberMe
-    const tokenExpiry = rememberMe ? '30d' : (process.env.JWT_EXPIRE || '24h');
-    const refreshTokenExpiry = rememberMe ? '90d' : (process.env.REFRESH_TOKEN_EXPIRE || '7d');
-
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: tokenExpiry }
-    );
-
-    const refreshToken = jwt.sign(
-      { id: user.id },
-      process.env.REFRESH_TOKEN_SECRET,
-      { expiresIn: refreshTokenExpiry }
-    );
+    const { token, refreshToken } = await issueTokens(user, rememberMe, req.headers['user-agent']);
 
     logger.info(`User logged in: ${username} (${user.role})`);
 
@@ -214,7 +225,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
 });
 
 // Refresh token
-router.post('/refresh', (req, res) => {
+router.post('/refresh', async (req, res) => {
   try {
     const { refreshToken } = req.body;
 
@@ -222,14 +233,22 @@ router.post('/refresh', (req, res) => {
       return res.status(400).json({ message: 'Refresh token is required' });
     }
 
-    const decoded = jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET);
-    const token = jwt.sign(
-      { id: decoded.id },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || '24h' }
-    );
+    const session = await Session.findOne({
+      where: { refresh_token: refreshToken, is_active: true }
+    });
 
-    res.json({ token });
+    if (!session || new Date() > session.expires_at) {
+      if (session) await session.update({ is_active: false });
+      return res.status(401).json({ message: 'Invalid or expired refresh token' });
+    }
+
+    const newAccessToken = crypto.randomBytes(48).toString('hex');
+    await session.update({
+      access_token:  newAccessToken,
+      last_activity: new Date()
+    });
+
+    res.json({ token: newAccessToken });
   } catch (error) {
     logger.error('Token refresh error:', error);
     res.status(401).json({ message: 'Invalid refresh token' });
@@ -298,18 +317,7 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
     user.last_login = new Date();
     await user.save();
 
-    // Generate tokens
-    const token = jwt.sign(
-      { id: user.id, username: user.username, role: user.role },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRE || '24h' }
-    );
-
-    const refreshToken = jwt.sign(
-      { id: user.id },
-      process.env.REFRESH_TOKEN_SECRET,
-      { expiresIn: process.env.REFRESH_TOKEN_EXPIRE || '7d' }
-    );
+    const { token, refreshToken } = await issueTokens(user, false, req.headers['user-agent']);
 
     logger.info(`User completed 2FA login: ${user.username}`);
 
@@ -530,6 +538,31 @@ router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
   } catch (error) {
     logger.error('Resend verification error:', error);
     res.status(500).json({ message: 'Error sending verification email' });
+  }
+});
+
+// Logout — invalidate current session
+router.post('/logout', authenticate, async (req, res) => {
+  try {
+    const token = req.headers.authorization.split(' ')[1];
+    await Session.update({ is_active: false }, { where: { access_token: token } });
+    logger.info(`User logged out: ${req.user.username}`);
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    logger.error('Logout error:', error);
+    res.status(500).json({ message: 'Error during logout' });
+  }
+});
+
+// Logout all devices — invalidate every session for this user
+router.post('/logout-all', authenticate, async (req, res) => {
+  try {
+    await Session.update({ is_active: false }, { where: { user_id: req.user.id } });
+    logger.info(`All sessions revoked for user: ${req.user.username}`);
+    res.json({ message: 'Logged out from all devices' });
+  } catch (error) {
+    logger.error('Logout-all error:', error);
+    res.status(500).json({ message: 'Error during logout' });
   }
 });
 
