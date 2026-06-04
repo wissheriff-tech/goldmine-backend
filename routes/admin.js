@@ -552,9 +552,14 @@ router.post('/products', authenticate, authorize(['superadmin', 'admin']), async
 router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    const { price_NSL, daily_income_NSL, active, description, validity_days } = req.body;
+    const updates = {};
+    if (price_NSL       !== undefined) updates.price_NSL = price_NSL;
+    if (daily_income_NSL !== undefined) updates.daily_income_NSL = daily_income_NSL;
+    if (active          !== undefined) updates.active = active;
+    if (description     !== undefined) updates.description = description;
+    if (validity_days   !== undefined) updates.validity_days = validity_days;
 
-    // Recalculate USDT if NSL price changed
     if (updates.price_NSL) {
       const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
       updates.price_usdt = (updates.price_NSL / nslToUsdt).toFixed(2);

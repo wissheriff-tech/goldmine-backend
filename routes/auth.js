@@ -12,6 +12,8 @@ const REFRESH_TOKEN_TTL_MS = parseInt(process.env.REFRESH_TOKEN_TTL_MS || String
 const REMEMBER_ME_ACCESS_TTL_MS  = 30 * 24 * 60 * 60 * 1000;
 const REMEMBER_ME_REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+
 const issueTokens = async (user, rememberMe = false, deviceInfo = null) => {
   const accessToken  = crypto.randomBytes(48).toString('hex');
   const refreshToken = crypto.randomBytes(48).toString('hex');
@@ -20,13 +22,14 @@ const issueTokens = async (user, rememberMe = false, deviceInfo = null) => {
   const refreshTtl = rememberMe ? REMEMBER_ME_REFRESH_TTL_MS : REFRESH_TOKEN_TTL_MS;
 
   await Session.create({
-    user_id:       user.id,
-    access_token:  accessToken,
-    refresh_token: refreshToken,
-    is_active:     true,
-    last_activity: new Date(now),
-    expires_at:    new Date(now + refreshTtl),
-    device_info:   deviceInfo
+    user_id:           user.id,
+    access_token:      hashToken(accessToken),
+    refresh_token:     hashToken(refreshToken),
+    is_active:         true,
+    last_activity:     new Date(now),
+    access_expires_at: new Date(now + accessTtl),
+    expires_at:        new Date(now + refreshTtl),
+    device_info:       deviceInfo
   });
 
   return { token: accessToken, refreshToken, accessExpiresAt: new Date(now + accessTtl) };
@@ -162,7 +165,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       return res.status(403).json({ message: 'Your account has been frozen' });
     }
 
-    if (user.status === 'pending' && user.role === 'user') {
+    if (user.status === 'pending') {
       return res.status(403).json({ message: 'Your account is pending approval' });
     }
 
@@ -234,7 +237,7 @@ router.post('/refresh', async (req, res) => {
     }
 
     const session = await Session.findOne({
-      where: { refresh_token: refreshToken, is_active: true }
+      where: { refresh_token: hashToken(refreshToken), is_active: true }
     });
 
     if (!session || new Date() > session.expires_at) {
@@ -243,9 +246,11 @@ router.post('/refresh', async (req, res) => {
     }
 
     const newAccessToken = crypto.randomBytes(48).toString('hex');
+    const accessTtl = ACCESS_TOKEN_TTL_MS;
     await session.update({
-      access_token:  newAccessToken,
-      last_activity: new Date()
+      access_token:      hashToken(newAccessToken),
+      access_expires_at: new Date(Date.now() + accessTtl),
+      last_activity:     new Date()
     });
 
     res.json({ token: newAccessToken });
@@ -545,7 +550,7 @@ router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
 router.post('/logout', authenticate, async (req, res) => {
   try {
     const token = req.headers.authorization.split(' ')[1];
-    await Session.update({ is_active: false }, { where: { access_token: token } });
+    await Session.update({ is_active: false }, { where: { access_token: hashToken(token) } });
     logger.info(`User logged out: ${req.user.username}`);
     res.json({ message: 'Logged out successfully' });
   } catch (error) {

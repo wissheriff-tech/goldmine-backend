@@ -364,7 +364,7 @@ router.get('/referrals/leaderboard', authenticate, async (req, res) => {
       include: [{
         model: User,
         as: 'referrer',
-        attributes: ['username', 'phone', 'vip_level']
+        attributes: ['username', 'vip_level']
       }],
       group: ['referrer_id', 'referrer.id'],
       order: [[sequelize.fn('SUM', sequelize.col('bonus_NSL')), 'DESC']],
@@ -375,7 +375,6 @@ router.get('/referrals/leaderboard', authenticate, async (req, res) => {
       rank: index + 1,
       user_id: entry.referrer_id,
       username: entry.referrer?.username,
-      phone: entry.referrer?.phone,
       vip_level: entry.referrer?.vip_level,
       total_referrals: parseInt(entry.getDataValue('total_referrals')) || 0,
       total_earnings: parseFloat(entry.getDataValue('total_earnings')) || 0

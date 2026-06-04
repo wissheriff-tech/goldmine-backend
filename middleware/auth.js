@@ -1,6 +1,9 @@
+const crypto = require('crypto');
 const User = require('../models/User');
 const Session = require('../models/Session');
 const logger = require('../utils/logger');
+
+const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
 const authenticate = async (req, res, next) => {
   try {
@@ -10,16 +13,20 @@ const authenticate = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
+    const tokenHash = hashToken(token);
 
     const session = await Session.findOne({
-      where: { access_token: token, is_active: true }
+      where: { access_token: tokenHash, is_active: true }
     });
 
-    if (!session || new Date() > session.expires_at) {
-      if (session && new Date() > session.expires_at) {
-        await session.update({ is_active: false });
-      }
+    const now = new Date();
+    if (!session || now > session.expires_at) {
+      if (session) await session.update({ is_active: false });
       return res.status(401).json({ message: 'Invalid or expired token' });
+    }
+
+    if (session.access_expires_at && now > session.access_expires_at) {
+      return res.status(401).json({ message: 'Access token expired — please refresh' });
     }
 
     const user = await User.findByPk(session.user_id);

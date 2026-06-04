@@ -40,8 +40,11 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (mobile apps, Postman, etc.)
-    if (!origin) return callback(null, true);
+    // Allow no-origin only in development (Postman, curl, etc.)
+    if (!origin) {
+      if (process.env.NODE_ENV !== 'production') return callback(null, true);
+      return callback(new Error('Origin required in production'));
+    }
 
     // Check if origin matches any allowed origin (string or regex)
     const isAllowed = allowedOrigins.some(allowed => {
@@ -171,18 +174,8 @@ if (isVercel) {
   });
 }
 
-app.get('/api/ping', async (req, res) => {
-  let syncError = null;
-  if (!dbReady) {
-    try {
-      await sequelize.authenticate();
-      await sequelize.sync({ force: false });
-      syncError = 'sync ok';
-    } catch(e) {
-      syncError = e.message.slice(0, 200);
-    }
-  }
-  res.json({ ok: true, env: process.env.NODE_ENV, db: !!process.env.DATABASE_URL, dbReady, isVercel: process.env.VERCEL, syncError });
+app.get('/api/ping', (req, res) => {
+  res.json({ ok: true, ready: dbReady });
 });
 
 // Register Routes

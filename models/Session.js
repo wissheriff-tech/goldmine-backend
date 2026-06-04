@@ -29,6 +29,10 @@ const Session = sequelize.define('Session', {
     type: DataTypes.BOOLEAN,
     defaultValue: true
   },
+  access_expires_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
   last_activity: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
