@@ -1,6 +1,7 @@
 const express = require('express');
 const { User, Transaction, Product } = require('../models');
 const { Op } = require('sequelize');
+const { sequelize } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
@@ -57,99 +58,71 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
 router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateApproveReject, async (req, res) => {
   try {
     const { reason } = req.body;
-    const transaction = await Transaction.findByPk(req.params.id);
 
-    if (!transaction) {
-      return res.status(404).json({ message: 'Transaction not found' });
-    }
+    let savedTransaction, savedUser;
 
-    const user = await User.findByPk(transaction.user_id);
+    await sequelize.transaction(async (t) => {
+      const transaction = await Transaction.findOne({
+        where: { id: req.params.id },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+      if (!transaction) throw Object.assign(new Error('Transaction not found'), { status: 404 });
+      if (transaction.status !== 'pending') throw Object.assign(new Error('Transaction is not pending'), { status: 400 });
 
-    // CRITICAL FIX: Only update NSL balance, not USDT
-    // USDT is just a conversion for display purposes
-    if (transaction.type === 'recharge') {
-      // Apply 15% fee for standard users, no fee for super admin
-      let creditAmount = transaction.amount_NSL;
-      let rechargeFee = 0;
+      const user = await User.findOne({
+        where: { id: transaction.user_id },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
 
-      if (user.role !== 'superadmin') {
-        // Standard user - apply 15% fee
-        rechargeFee = (transaction.amount_NSL * FEE.RECHARGE_FEE_PERCENTAGE) / 100;
-        creditAmount = transaction.amount_NSL - rechargeFee;
+      if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
+
+      if (transaction.type === 'recharge') {
+        let creditAmount = transaction.amount_NSL;
+        let rechargeFee = 0;
+        if (user.role !== 'superadmin') {
+          rechargeFee = (transaction.amount_NSL * FEE.RECHARGE_FEE_PERCENTAGE) / 100;
+          creditAmount = transaction.amount_NSL - rechargeFee;
+        }
+        user.balance_NSL += creditAmount;
+        logger.info(`Recharge approved: User ${user.phone}, Amount: ${transaction.amount_NSL} NSL, Fee: ${rechargeFee.toFixed(2)} NSL, Credited: ${creditAmount.toFixed(2)} NSL`);
+        if (rechargeFee > 0) {
+          transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${FEE.RECHARGE_FEE_PERCENTAGE}%)`;
+        }
+      } else if (transaction.type === 'withdrawal') {
+        if (user.balance_NSL < transaction.amount_NSL) throw Object.assign(new Error('Insufficient balance for withdrawal'), { status: 400 });
+        user.balance_NSL -= transaction.amount_NSL;
       }
-      // Super admin gets full amount (no fee)
 
-      user.balance_NSL += creditAmount;
+      transaction.status = 'approved';
+      transaction.approved_by = req.user.id;
+      transaction.completed_at = new Date();
+      if (reason) transaction.notes = reason;
 
-      // Log fee details
-      logger.info(`Recharge approved: User ${user.phone}, Amount: ${transaction.amount_NSL} NSL, Fee: ${rechargeFee.toFixed(2)} NSL, Credited: ${creditAmount.toFixed(2)} NSL`);
+      await transaction.save({ transaction: t });
+      await user.save({ transaction: t });
 
-      // Update transaction notes with fee info
-      if (rechargeFee > 0) {
-        transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${FEE.RECHARGE_FEE_PERCENTAGE}%)`;
-      }
-      // Note: We deliberately do not update balance_usdt here as it is not a store of value
-    } else if (transaction.type === 'withdrawal') {
-      if (user.balance_NSL < transaction.amount_NSL) {
-        return res.status(400).json({ message: 'Insufficient balance for withdrawal' });
-      }
-      user.balance_NSL -= transaction.amount_NSL;
+      savedTransaction = transaction;
+      savedUser = user;
+    });
+
+    logger.info(`Transaction approved: ${savedTransaction.id} by ${req.user.phone}`);
+
+    if (savedUser.email) {
+      emailService.sendTransactionApproved(savedUser.email, savedUser.username, savedTransaction.type, savedTransaction.amount_NSL, savedTransaction.amount_usdt, savedUser.balance_NSL).catch(e => logger.error('Email notification error:', e));
     }
 
-    transaction.status = 'approved';
-    transaction.approved_by = req.user.id;
-    transaction.completed_at = new Date();
-    if (reason) {
-      transaction.notes = reason;
-    }
-
-    await transaction.save();
-    await user.save();
-
-    logger.info(`Transaction approved: ${transaction.id} by ${req.user.phone}`);
-
-    // Send email notification
-    if (user.email) {
-      try {
-        await emailService.sendTransactionApproved(
-          user.email,
-          user.username,
-          transaction.type,
-          transaction.amount_NSL,
-          transaction.amount_usdt,
-          user.balance_NSL
-        );
-      } catch (emailError) {
-        logger.error('Email notification error:', emailError);
-        // Don't fail the transaction if email fails
-      }
-    }
-
-    // Send in-app notification
-    try {
-      await notificationService.notifyTransactionApproved(
-        user.id,
-        transaction.type,
-        transaction.amount_NSL
-      );
-    } catch (notifError) {
-      logger.error('In-app notification error:', notifError);
-      // Don't fail the transaction if notification fails
-    }
+    notificationService.notifyTransactionApproved(savedUser.id, savedTransaction.type, savedTransaction.amount_NSL).catch(e => logger.error('In-app notification error:', e));
 
     res.json({
       message: 'Transaction approved',
-      transaction,
-      user: {
-        balance_NSL: user.balance_NSL,
-        balance_usdt: user.balance_usdt
-      }
+      transaction: savedTransaction,
+      user: { balance_NSL: savedUser.balance_NSL, balance_usdt: savedUser.balance_usdt }
     });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message });
     logger.error('Transaction approval error:', error);
     res.status(500).json({ message: 'Error approving transaction', error: error.message });
   }

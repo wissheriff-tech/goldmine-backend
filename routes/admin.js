@@ -313,18 +313,15 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
       });
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     // Generate referral code
     const referral_code = Math.random().toString(36).substring(2, 12).toUpperCase();
 
-    // Create admin user
+    // Create admin user — let the beforeCreate hook hash password_hash
     const adminUser = await User.create({
       username,
       phone,
       email: email || `${username}@salonmoney.com`,
-      password: hashedPassword,
+      password_hash: password,
       referral_code,
       role,
       status: 'active',
@@ -347,11 +344,6 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
         role: adminUser.role,
         referral_code: adminUser.referral_code,
         status: adminUser.status
-      },
-      credentials: {
-        username: username,
-        password: password,
-        note: 'Please save these credentials and share them securely with the new admin'
       }
     });
   } catch (error) {

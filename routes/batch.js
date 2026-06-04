@@ -241,40 +241,40 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
 
     for (const transaction of transactions) {
       try {
-        const user = transaction.user;
+        await sequelize.transaction(async (t) => {
+          const lockedTx = await Transaction.findOne({
+            where: { id: transaction.id, status: 'pending' },
+            lock: t.LOCK.UPDATE,
+            transaction: t,
+          });
 
-        if (!user) {
-          results.failed++;
-          results.errors.push({ transaction_id: transaction.id, error: 'User not found' });
-          continue;
-        }
+          if (!lockedTx) throw new Error('Transaction no longer pending');
 
-        // Update user balance
-        if (transaction.type === 'recharge') {
-          user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(transaction.amount_NSL);
-        } else if (transaction.type === 'withdrawal') {
-          if (parseFloat(user.balance_NSL) < parseFloat(transaction.amount_NSL)) {
-            results.failed++;
-            results.errors.push({ transaction_id: transaction.id, error: 'Insufficient balance' });
-            continue;
+          const user = await User.findOne({
+            where: { id: lockedTx.user_id },
+            lock: t.LOCK.UPDATE,
+            transaction: t,
+          });
+
+          if (!user) throw new Error('User not found');
+
+          if (lockedTx.type === 'recharge') {
+            user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(lockedTx.amount_NSL);
+          } else if (lockedTx.type === 'withdrawal') {
+            if (parseFloat(user.balance_NSL) < parseFloat(lockedTx.amount_NSL)) throw new Error('Insufficient balance');
+            user.balance_NSL = (parseFloat(user.balance_NSL) || 0) - parseFloat(lockedTx.amount_NSL);
           }
-          user.balance_NSL = (parseFloat(user.balance_NSL) || 0) - parseFloat(transaction.amount_NSL);
-        }
 
-        transaction.status = 'approved';
-        transaction.approved_by = req.user.id;
-        transaction.completed_at = new Date();
-        if (reason) transaction.notes = reason;
+          lockedTx.status = 'approved';
+          lockedTx.approved_by = req.user.id;
+          lockedTx.completed_at = new Date();
+          if (reason) lockedTx.notes = reason;
 
-        await transaction.save();
-        await user.save();
+          await lockedTx.save({ transaction: t });
+          await user.save({ transaction: t });
 
-        // Send notification
-        await notificationService.notifyTransactionApproved(
-          user.id,
-          transaction.type,
-          transaction.amount_NSL
-        );
+          notificationService.notifyTransactionApproved(user.id, lockedTx.type, lockedTx.amount_NSL).catch(() => {});
+        });
 
         results.approved++;
       } catch (error) {

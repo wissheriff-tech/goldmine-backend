@@ -125,9 +125,7 @@ router.post('/2fa/verify', authenticate, async (req, res) => {
     let isValid = false;
 
     if (twoFA.method === 'app') {
-      // For app-based, we'd use a library like speakeasy to verify TOTP
-      // For now, simple check
-      isValid = code && code.length === 6;
+      return res.status(400).json({ message: 'App-based 2FA is not yet supported. Please use email/SMS method.' });
     } else {
       // For SMS/Email, check the code sent
       if (!user.twoFactorCode || !user.twoFactorExpires) {
@@ -203,7 +201,7 @@ router.post('/2fa/disable', authenticate, async (req, res) => {
 
     // Check backup code
     const backupCode = twoFA.backup_codes.find(bc => bc.code === code && !bc.used);
-    if (!backupCode && code !== '000000') { // Allow emergency code for testing
+    if (!backupCode) {
       return res.status(401).json({ message: 'Invalid 2FA or backup code' });
     }
 

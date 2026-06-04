@@ -1,5 +1,5 @@
 const express = require('express');
-const { User, Product, UserProduct, Transaction, Referral } = require('../models');
+const { User, Product, UserProduct, Transaction, Referral, sequelize } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
@@ -36,177 +36,85 @@ router.get('/', async (req, res) => {
 router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async (req, res) => {
   try {
     const { product_id } = req.body;
-    const user = await User.findByPk(req.user.id);
+
+    // Validate product exists and is active before entering the transaction
     const product = await Product.findByPk(product_id);
+    if (!product) return res.status(404).json({ message: 'Product not found' });
+    if (!product.active) return res.status(400).json({ message: 'Product is not available' });
 
-    if (!user || !product) {
-      return res.status(404).json({ message: 'User or product not found' });
-    }
+    let purchaseResult;
 
-    // Check if product is active
-    if (!product.active) {
-      return res.status(400).json({ message: 'Product is not available' });
-    }
-
-    // Check if user has sufficient balance
-    if (user.balance_NSL < product.price_NSL) {
-      return res.status(400).json({ message: 'Insufficient balance' });
-    }
-
-    // Check if user already owns this product and it's still active
-    const existingProduct = await UserProduct.findOne({
-      where: {
-        user_id: req.user.id,
-        product_id: product_id,
-        is_active: true
-      }
-    });
-
-    if (existingProduct) {
-      return res.status(400).json({
-        message: 'You already own this product. Wait for it to expire before repurchasing.',
-        expires_at: existingProduct.expires_at
+    await sequelize.transaction(async (t) => {
+      const user = await User.findOne({
+        where: { id: req.user.id },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
       });
-    }
 
-    // Calculate expiration date (60 days from now)
-    const purchaseDate = new Date();
-    const expiresAt = new Date(purchaseDate.getTime() + (product.validity_days * 24 * 60 * 60 * 1000));
+      if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
+      if (user.balance_NSL < product.price_NSL) throw Object.assign(new Error('Insufficient balance'), { status: 400 });
 
-    // Deduct balance
-    user.balance_NSL -= product.price_NSL;
+      const existingProduct = await UserProduct.findOne({
+        where: { user_id: user.id, product_id, is_active: true },
+        transaction: t,
+      });
 
-    // Add product to UserProduct table
-    await UserProduct.create({
-      user_id: user.id,
-      product_id: product.id,
-      purchase_date: purchaseDate,
-      expires_at: expiresAt,
-      auto_renew: true,
-      is_active: true
-    });
+      if (existingProduct) throw Object.assign(new Error('You already own this product. Wait for it to expire before repurchasing.'), { status: 400, expires_at: existingProduct.expires_at });
 
-    // Update VIP level to highest owned product
-    const activeUserProducts = await UserProduct.findAll({
-      where: { user_id: user.id, is_active: true },
-      include: [{ model: Product, as: 'product', attributes: ['name'] }]
-    });
+      const purchaseDate = new Date();
+      const expiresAt = new Date(purchaseDate.getTime() + (product.validity_days * 24 * 60 * 60 * 1000));
 
-    const vipLevels = ['VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'];
-    let highestVip = 'none';
+      user.balance_NSL -= product.price_NSL;
 
-    for (const userProduct of activeUserProducts) {
-      const prod = userProduct.product;
-      if (prod) {
-        const prodName = prod.name;
-        if (vipLevels.indexOf(prodName) > vipLevels.indexOf(highestVip)) {
-          highestVip = prodName;
+      await UserProduct.create({ user_id: user.id, product_id: product.id, purchase_date: purchaseDate, expires_at: expiresAt, auto_renew: true, is_active: true }, { transaction: t });
+
+      const activeUserProducts = await UserProduct.findAll({
+        where: { user_id: user.id, is_active: true },
+        include: [{ model: Product, as: 'product', attributes: ['name'] }],
+        transaction: t,
+      });
+
+      const vipLevels = ['VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'];
+      let highestVip = 'none';
+      for (const up of activeUserProducts) {
+        if (up.product && vipLevels.indexOf(up.product.name) > vipLevels.indexOf(highestVip)) highestVip = up.product.name;
+      }
+      user.vip_level = highestVip;
+      await user.save({ transaction: t });
+
+      await Transaction.create({ user_id: user.id, type: 'purchase', amount_NSL: product.price_NSL, amount_usdt: product.price_usdt, product_id: product.id, status: 'approved', notes: `Purchased ${product.name} - Valid until ${expiresAt.toLocaleDateString()}` }, { transaction: t });
+
+      // Referral bonus — only on first purchase
+      if (user.referred_by) {
+        const referrer = await User.findOne({ where: { referral_code: user.referred_by }, lock: t.LOCK.UPDATE, transaction: t });
+        if (referrer) {
+          const existingBonus = await Referral.findOne({ where: { referrer_id: referrer.id, referred_id: user.id, status: 'paid' }, transaction: t });
+          if (!existingBonus) {
+            const bonusPercentage = parseInt(process.env.REFERRAL_BONUS_PERCENTAGE || 35);
+            const bonusAmount = (product.price_NSL * bonusPercentage) / 100;
+            referrer.balance_NSL += bonusAmount;
+            await referrer.save({ transaction: t });
+            await Referral.create({ referrer_id: referrer.id, referred_id: user.id, bonus_NSL: bonusAmount, recharge_amount_NSL: product.price_NSL, bonus_percentage: bonusPercentage, status: 'paid' }, { transaction: t });
+            logger.info(`Referral bonus: ${referrer.phone} earned ${bonusAmount} NSL from ${user.phone}'s first purchase`);
+            if (referrer.email) emailService.sendNewReferral(referrer.email, referrer.username, user.username, bonusAmount).catch(() => {});
+            notificationService.notifyReferralBonus(referrer.id, bonusAmount, user.username).catch(() => {});
+          }
         }
       }
-    }
 
-    user.vip_level = highestVip;
-    await user.save();
-
-    // Create transaction with product reference
-    const transaction = await Transaction.create({
-      user_id: user.id,
-      type: 'purchase',
-      amount_NSL: product.price_NSL,
-      amount_usdt: product.price_usdt,
-      product_id: product.id,
-      status: 'approved',
-      notes: `Purchased ${product.name} - Valid until ${expiresAt.toLocaleDateString()}`
+      purchaseResult = { user, product, purchaseDate, expiresAt };
     });
 
-    // Handle referral bonus (ONLY on first purchase)
-    if (user.referred_by) {
-      const referrer = await User.findOne({ where: { referral_code: user.referred_by } });
-
-      if (referrer) {
-        // Check if referral bonus has already been paid for this user
-        const existingBonus = await Referral.findOne({
-          where: {
-            referrer_id: referrer.id,
-            referred_id: user.id,
-            status: 'paid'
-          }
-        });
-
-        // Only pay bonus if this is the first purchase (no existing bonus paid)
-        if (!existingBonus) {
-          const bonusPercentage = parseInt(process.env.REFERRAL_BONUS_PERCENTAGE || 35);
-          const bonusAmount = (product.price_NSL * bonusPercentage) / 100;
-
-          referrer.balance_NSL += bonusAmount;
-          await referrer.save();
-
-          const referral = await Referral.create({
-            referrer_id: referrer.id,
-            referred_id: user.id,
-            bonus_NSL: bonusAmount,
-            recharge_amount_NSL: product.price_NSL,
-            bonus_percentage: bonusPercentage,
-            status: 'paid'
-          });
-
-          logger.info(`Referral bonus: ${referrer.phone} earned ${bonusAmount} NSL from ${user.phone}'s first purchase`);
-
-          // Send email notification to referrer
-          if (referrer.email) {
-            await emailService.sendNewReferral(
-              referrer.email,
-              referrer.username,
-              user.username,
-              bonusAmount
-            );
-          }
-
-          // Send in-app notification to referrer
-          try {
-            await notificationService.notifyReferralBonus(
-              referrer.id,
-              bonusAmount,
-              user.username
-            );
-          } catch (notifError) {
-            logger.error('Referral notification error:', notifError);
-          }
-        } else {
-          logger.info(`Referral bonus already paid for ${user.phone} - skipping`);
-        }
-      }
-    }
-
-    logger.info(`Product purchased: ${user.phone} - ${product.name} (expires: ${expiresAt.toISOString()})`);
-
-    // Send in-app notification to buyer
-    try {
-      await notificationService.notifyProductPurchased(
-        user.id,
-        product.name,
-        expiresAt
-      );
-    } catch (notifError) {
-      logger.error('Product purchase notification error:', notifError);
-    }
+    logger.info(`Product purchased: ${purchaseResult.user.phone} - ${purchaseResult.product.name} (expires: ${purchaseResult.expiresAt.toISOString()})`);
+    notificationService.notifyProductPurchased(purchaseResult.user.id, purchaseResult.product.name, purchaseResult.expiresAt).catch(() => {});
 
     res.status(201).json({
       message: 'Product purchased successfully',
-      user: {
-        balance_NSL: user.balance_NSL,
-        balance_usdt: user.balance_usdt,
-        vip_level: user.vip_level
-      },
-      product: {
-        name: product.name,
-        daily_income_NSL: product.daily_income_NSL,
-        purchase_date: purchaseDate,
-        expires_at: expiresAt,
-        auto_renew: true
-      }
+      user: { balance_NSL: purchaseResult.user.balance_NSL, balance_usdt: purchaseResult.user.balance_usdt, vip_level: purchaseResult.user.vip_level },
+      product: { name: purchaseResult.product.name, daily_income_NSL: purchaseResult.product.daily_income_NSL, purchase_date: purchaseResult.purchaseDate, expires_at: purchaseResult.expiresAt, auto_renew: true }
     });
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ message: error.message, ...(error.expires_at && { expires_at: error.expires_at }) });
     logger.error('Product purchase error:', error);
     res.status(500).json({ message: 'Error purchasing product', error: error.message });
   }
