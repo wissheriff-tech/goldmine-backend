@@ -125,10 +125,10 @@ if (!isVercel) {
       logger.info('Database connected');
       await sequelize.sync({ alter: false, force: false });
       logger.info('Database tables synced');
-      const admin = await User.findOne({ where: { username: 'superadmin' } });
+      const admin = await User.findOne({ where: { role: 'superadmin' } });
       if (!admin) {
         await User.create({
-          username: 'superadmin',
+          username: 'wisrado',
           phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
           email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
           password_hash: process.env.SUPER_ADMIN_PASSWORD,
@@ -184,10 +184,10 @@ const initDb = async () => {
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
     const genCode = () => Math.random().toString(36).substring(2, 12).toUpperCase();
-    const admin = await User.findOne({ where: { username: 'superadmin' } });
+    const admin = await User.findOne({ where: { role: 'superadmin' } });
     if (!admin) {
       await User.create({
-        username: 'superadmin',
+        username: 'wisrado',
         phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
         email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
         password_hash: process.env.SUPER_ADMIN_PASSWORD,
