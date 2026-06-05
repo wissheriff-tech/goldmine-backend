@@ -159,8 +159,14 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
   try {
     const { username, password, rememberMe } = req.body;
 
+    const identifier = username.trim();
     const user = await User.scope('withSecrets').findOne({
-      where: { username: username.toLowerCase() }
+      where: {
+        [Op.or]: [
+          { username: identifier.toLowerCase() },
+          { phone: identifier },
+        ]
+      }
     });
     if (!user) {
       return res.status(401).json({ message: 'Invalid username or password' });
