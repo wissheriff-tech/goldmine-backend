@@ -111,11 +111,9 @@ try {
   User = models.User;
   console.log('Models loaded OK. NODE_ENV:', process.env.NODE_ENV);
 } catch (modelErr) {
-  console.error('MODELS LOAD FAILED:', modelErr.message);
-  // Add a fallback route to expose the error
-  app.use((req, res) => res.status(500).json({ error: 'models_load_failed', message: modelErr.message }));
-  module.exports = app;
-  throw modelErr;
+  console.error('MODELS LOAD FAILED:', modelErr.message, modelErr.stack);
+  sequelize = null;
+  User = null;
 }
 
 // On Vercel: skip startup DB sync (too slow for cold start). Tables are synced lazily.
