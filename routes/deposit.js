@@ -5,6 +5,7 @@ const fs = require('fs');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { DepositProof, User, Transaction } = require('../models');
 const logger = require('../utils/logger');
+const emailService = require('../utils/emailService');
 
 const router = express.Router();
 
@@ -152,6 +153,11 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
 
     logger.info(`Deposit ${proof.id} approved for user ${user.username}: ${amount} USDT → ${nslAmount} NSL`);
 
+    if (user.email) {
+      emailService.sendTransactionApproved(user.email, user.username, 'deposit', nslAmount, amount, user.balance_NSL)
+        .catch(err => logger.error('Deposit approval email failed:', err));
+    }
+
     res.json({ success: true, message: 'Deposit approved and balance credited', nsl_credited: nslAmount });
   } catch (error) {
     logger.error('Deposit approve error:', error);
@@ -170,6 +176,12 @@ router.patch('/:id/reject', authenticate, authorizeRoles('admin', 'superadmin', 
     if (proof.status !== 'pending') return res.status(400).json({ message: 'Deposit already processed' });
 
     await proof.reject(req.user.id, reason);
+
+    const user = await User.findByPk(proof.user_id, { attributes: ['email', 'username'] });
+    if (user?.email) {
+      emailService.sendTransactionRejected(user.email, user.username, 'deposit', proof.user_submitted_amount, reason)
+        .catch(err => logger.error('Deposit rejection email failed:', err));
+    }
 
     logger.info(`Deposit ${proof.id} rejected: ${reason}`);
     res.json({ success: true, message: 'Deposit rejected' });
