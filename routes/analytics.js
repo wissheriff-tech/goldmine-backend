@@ -91,13 +91,13 @@ router.get('/user/dashboard', authenticate, async (req, res) => {
         timestamp: { [Op.gte]: last30Days }
       },
       attributes: [
-        [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'date'],
+        [fn('DATE', col('timestamp')), 'date'],
         'type',
         [fn('COUNT', col('id')), 'count'],
         [fn('SUM', col('amount_NSL')), 'amount']
       ],
-      group: [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'type'],
-      order: [[fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'ASC']],
+      group: [fn('DATE', col('timestamp')), 'type'],
+      order: [[fn('DATE', col('timestamp')), 'ASC']],
       raw: true
     });
 
@@ -110,11 +110,11 @@ router.get('/user/dashboard', authenticate, async (req, res) => {
         timestamp: { [Op.gte]: last7Days }
       },
       attributes: [
-        [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'date'],
+        [fn('DATE', col('timestamp')), 'date'],
         [fn('SUM', col('amount_NSL')), 'total']
       ],
-      group: [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d')],
-      order: [[fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'ASC']],
+      group: [fn('DATE', col('timestamp'))],
+      order: [[fn('DATE', col('timestamp')), 'ASC']],
       raw: true
     });
 
@@ -290,11 +290,11 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
         created_at: { [Op.gte]: last30Days }
       },
       attributes: [
-        [fn('DATE_FORMAT', col('created_at'), '%Y-%m-%d'), 'date'],
+        [fn('DATE', col('created_at')), 'date'],
         [fn('COUNT', col('id')), 'count']
       ],
-      group: [fn('DATE_FORMAT', col('created_at'), '%Y-%m-%d')],
-      order: [[fn('DATE_FORMAT', col('created_at'), '%Y-%m-%d'), 'ASC']],
+      group: [fn('DATE', col('created_at'))],
+      order: [[fn('DATE', col('created_at')), 'ASC']],
       raw: true
     });
 
@@ -306,12 +306,12 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
         timestamp: { [Op.gte]: last30Days }
       },
       attributes: [
-        [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'date'],
+        [fn('DATE', col('timestamp')), 'date'],
         [fn('SUM', col('amount_NSL')), 'NSL'],
         [fn('SUM', col('amount_usdt')), 'USDT']
       ],
-      group: [fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d')],
-      order: [[fn('DATE_FORMAT', col('timestamp'), '%Y-%m-%d'), 'ASC']],
+      group: [fn('DATE', col('timestamp'))],
+      order: [[fn('DATE', col('timestamp')), 'ASC']],
       raw: true
     });
 
