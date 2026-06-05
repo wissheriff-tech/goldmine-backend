@@ -2,16 +2,22 @@ process.on('uncaughtException', (err) => { console.error('UNCAUGHT:', err.messag
 process.on('unhandledRejection', (r) => { console.error('UNHANDLED_REJECTION:', r?.message || r); });
 
 // Force pg into ncc bundle
+console.log('BOOT:1 requiring pg');
 require("pg");
+console.log('BOOT:2 requiring express');
 const express = require('express');
 const path = require('path');
 const http = require('http');
 const cors = require('cors');
+console.log('BOOT:3 requiring cookie/compress/dotenv');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const dotenv = require('dotenv');
+console.log('BOOT:4 requiring logger');
 const logger = require('./utils/logger');
+console.log('BOOT:5 requiring emailService');
 const emailService = require('./utils/emailService');
+console.log('BOOT:6 requiring security middleware');
 
 // Security middleware
 const {
@@ -21,7 +27,9 @@ const {
   validateContentType,
   preventParameterPollution
 } = require('./middleware/security');
+console.log('BOOT:7 requiring auth middleware');
 const { authenticate } = require('./middleware/auth');
+console.log('BOOT:8 all top requires done');
 
 dotenv.config();
 
