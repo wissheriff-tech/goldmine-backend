@@ -18,7 +18,7 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 const setCookies = (res, accessToken, refreshToken, rememberMe = false) => {
   const accessMaxAge  = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
   const refreshMaxAge = rememberMe ? 90 * 24 * 60 * 60 * 1000 :  7 * 24 * 60 * 60 * 1000;
-  const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'strict' : 'lax' };
+  const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'none' : 'lax' };
   res.cookie('access_token',  accessToken,  { ...base, maxAge: accessMaxAge });
   res.cookie('refresh_token', refreshToken, { ...base, maxAge: refreshMaxAge, path: '/api/auth/refresh' });
 };
@@ -259,7 +259,7 @@ router.post('/refresh', async (req, res) => {
       last_activity:     new Date()
     });
 
-    const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'strict' : 'lax' };
+    const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'none' : 'lax' };
     res.cookie('access_token', newAccessToken, { ...base, maxAge: accessTtl });
     res.json({ token: newAccessToken });
   } catch (error) {
@@ -604,7 +604,7 @@ router.post('/logout', authenticate, async (req, res) => {
       await Session.update({ is_active: false }, { where: { access_token: hashToken(token) } });
     }
     const IS_PROD_COOKIE = process.env.NODE_ENV === 'production';
-    const base = { httpOnly: true, secure: IS_PROD_COOKIE, sameSite: IS_PROD_COOKIE ? 'strict' : 'lax' };
+    const base = { httpOnly: true, secure: IS_PROD_COOKIE, sameSite: IS_PROD_COOKIE ? 'none' : 'lax' };
     res.clearCookie('access_token', base);
     res.clearCookie('refresh_token', { ...base, path: '/api/auth/refresh' });
     logger.info(`User logged out: ${req.user.username}`);
