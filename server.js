@@ -29,8 +29,20 @@ if (!process.env.SUPER_ADMIN_PASSWORD) {
 // Check if running on Vercel (serverless)
 const isVercel = process.env.VERCEL === '1';
 
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION:', reason?.message || reason, reason?.stack);
+});
+
 const app = express();
 const server = http.createServer(app);
+
+// Debug endpoint — before ALL middleware, no deps
+app.get('/api/debug', (req, res) => {
+  res.json({ ok: true, node: process.version, env: process.env.NODE_ENV, isVercel });
+});
 
 // Trust proxy - Important for rate limiting behind reverse proxies
 app.set('trust proxy', 1);
