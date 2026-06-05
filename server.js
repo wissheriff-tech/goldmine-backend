@@ -1,3 +1,6 @@
+process.on('uncaughtException', (err) => { console.error('UNCAUGHT:', err.message, '\n', err.stack); });
+process.on('unhandledRejection', (r) => { console.error('UNHANDLED_REJECTION:', r?.message || r); });
+
 // Force pg into ncc bundle
 require("pg");
 const express = require('express');
