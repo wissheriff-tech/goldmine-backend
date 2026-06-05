@@ -183,6 +183,7 @@ const initDb = async () => {
     logger.info('Vercel DB: authenticated');
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
+    const genCode = () => Math.random().toString(36).substring(2, 12).toUpperCase();
     const admin = await User.findOne({ where: { username: 'superadmin' } });
     if (!admin) {
       await User.create({
@@ -191,15 +192,18 @@ const initDb = async () => {
         email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
         password_hash: process.env.SUPER_ADMIN_PASSWORD,
         role: 'superadmin',
-        referral_code: 'ADMIN00001',
+        referral_code: genCode(),
         status: 'active',
       });
       logger.info('Vercel DB: superadmin created');
     } else {
-      // Always sync password from env so rotating SUPER_ADMIN_PASSWORD takes effect
       admin.password_hash = process.env.SUPER_ADMIN_PASSWORD;
+      // Replace hardcoded default referral code with a random one
+      if (admin.referral_code === 'ADMIN00001') {
+        admin.referral_code = genCode();
+      }
       await admin.save();
-      logger.info('Vercel DB: superadmin password synced');
+      logger.info('Vercel DB: superadmin synced');
     }
     dbReady = true;
     logger.info('Vercel DB: ready');
