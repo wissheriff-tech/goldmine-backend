@@ -113,9 +113,35 @@ class EmailService {
     `));
   }
 
-  // Kept for compatibility
-  async sendProductExpiring() {}
-  async sendDailyIncomeSummary() {}
+  async sendDailyIncomeSummary(email, username, incomeNSL, newBalanceNSL) {
+    await this.send(email, 'Daily Income Credited — SalonMoney', wrap(`
+      <h2 style="color:#333;margin-top:0">💰 Daily Income Credited</h2>
+      <p style="color:#555">Hi ${username},</p>
+      <p style="color:#555">Your daily investment income has been credited to your account.</p>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
+        <p style="margin:4px 0;color:#166534">Today's Income: <strong>+${parseFloat(incomeNSL).toFixed(2)} NSL</strong></p>
+        <p style="margin:4px 0;color:#166534">New Balance: <strong>${parseFloat(newBalanceNSL).toFixed(2)} NSL</strong></p>
+      </div>
+      ${btn(`${FRONTEND}/dashboard`, 'View Dashboard')}
+    `));
+  }
+
+  async sendProductExpiring(email, username, productName, expiresAt, balanceNSL, requiredNSL) {
+    const expiry = new Date(expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    const shortfall = (parseFloat(requiredNSL) - parseFloat(balanceNSL)).toFixed(2);
+    await this.send(email, `Product Expired — SalonMoney`, wrap(`
+      <h2 style="color:#333;margin-top:0">⚠️ Product Expired</h2>
+      <p style="color:#555">Hi ${username},</p>
+      <p style="color:#555">Your product <strong>${productName}</strong> expired on ${expiry} and could not be auto-renewed due to insufficient balance.</p>
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px;margin:16px 0">
+        <p style="margin:4px 0;color:#991b1b">Your Balance: <strong>${parseFloat(balanceNSL).toFixed(2)} NSL</strong></p>
+        <p style="margin:4px 0;color:#991b1b">Required: <strong>${parseFloat(requiredNSL).toFixed(2)} NSL</strong></p>
+        <p style="margin:4px 0;color:#991b1b">Shortfall: <strong>${shortfall} NSL</strong></p>
+      </div>
+      <p style="color:#555">Top up your account and reactivate the product to resume earning daily income.</p>
+      ${btn(`${FRONTEND}/wallet`, 'Top Up Now')}
+    `));
+  }
 }
 
 module.exports = new EmailService();

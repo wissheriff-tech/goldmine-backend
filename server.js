@@ -8,6 +8,7 @@ const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const dotenv = require('dotenv');
 const logger = require('./utils/logger');
+const emailService = require('./utils/emailService');
 
 // Security middleware
 const {
@@ -301,6 +302,11 @@ if (!isVercel) {
         totalIncomeGenerated += data.total;
         totalUsersProcessed++;
         logger.info(`Income generated for ${data.user.phone}: ${data.total} NSL`);
+
+        if (data.user.email) {
+          emailService.sendDailyIncomeSummary(data.user.email, data.user.username, data.total, data.user.balance_NSL)
+            .catch(err => logger.error(`Daily income email failed for ${data.user.phone}:`, err));
+        }
       }
     }
 
@@ -361,6 +367,11 @@ cron.schedule('1 0 * * *', async () => {
           await up.save();
           totalDeactivated++;
           logger.warn(`Failed to renew ${product.name} for ${user.phone} - Insufficient balance (need ${product.price_NSL} NSL, have ${user.balance_NSL} NSL)`);
+
+          if (user.email) {
+            emailService.sendProductExpiring(user.email, user.username, product.name, up.expires_at, user.balance_NSL, product.price_NSL)
+              .catch(err => logger.error(`Product expiry email failed for ${user.phone}:`, err));
+          }
         }
       }
     }
