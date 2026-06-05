@@ -330,8 +330,9 @@ const updateProfileSchema = Joi.object({
     .optional(),
 
   profile_photo: Joi.string()
-    .uri()
+    .pattern(/^\/uploads\/[a-zA-Z0-9_\-./]+$/)
     .optional()
+    .messages({ 'string.pattern.base': 'profile_photo must be a relative upload path' })
 });
 
 // Currency Rate Schema

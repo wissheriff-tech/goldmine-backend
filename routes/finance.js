@@ -309,24 +309,20 @@ router.patch('/users/:id/suspend', authenticate, authorize(['superadmin', 'finan
 // Finance: Activate user account
 router.patch('/users/:id/activate', authenticate, authorize(['superadmin', 'finance']), financeLimiter, async (req, res) => {
   try {
-    await User.update(
-      { status: 'active' },
-      { where: { id: req.params.id } }
-    );
+    const { reason } = req.body;
 
-    const user = await User.findByPk(req.params.id, {
-      attributes: { exclude: ['password_hash'] }
-    });
+    const user = await User.findByPk(req.params.id, { attributes: { exclude: ['password_hash'] } });
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+    const previousStatus = user.status;
+    await user.update({ status: 'active' });
 
-    logger.info(`User activated by finance (${req.user.phone}): ${user.phone}`);
+    logger.info(`User activated by finance (${req.user.phone}): ${user.phone} — previous status: ${previousStatus}${reason ? ` — reason: ${reason}` : ''}`);
 
     res.json({
       message: 'User account activated',
-      user
+      user,
+      audit: { activated_by: req.user.id, previous_status: previousStatus, reason: reason || null }
     });
   } catch (error) {
     logger.error('User activation error:', error);

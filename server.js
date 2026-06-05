@@ -1,8 +1,10 @@
 // Force pg into ncc bundle
 require("pg");
 const express = require('express');
+const path = require('path');
 const http = require('http');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const dotenv = require('dotenv');
 const logger = require('./utils/logger');
@@ -68,6 +70,7 @@ const corsOptions = {
 
 // Core Middleware (Order matters!)
 app.use(cors(corsOptions));
+app.use(cookieParser());
 app.use(compression()); // Compress responses
 app.use(securityHeaders); // Security headers via Helmet
 app.use(express.json({ limit: '10mb' })); // Parse JSON with size limit
@@ -76,14 +79,13 @@ app.use(preventParameterPollution); // Prevent parameter pollution
 app.use(requestLogger); // Log all requests
 app.use(validateContentType); // Validate content types
 
-// Serve uploaded files with explicit CORS headers
-app.use('/uploads', (req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET');
-  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  res.setHeader('Cache-Control', 'public, max-age=31536000');
-  next();
-}, express.static('uploads'));
+// Serve uploaded files — authenticated route only (no unauthenticated static access)
+app.get('/uploads/*', require('./middleware/auth').authenticate, (req, res) => {
+  const filePath = path.join(__dirname, req.path);
+  res.sendFile(filePath, (err) => {
+    if (err) res.status(404).json({ message: 'File not found' });
+  });
+});
 
 // Global Rate Limiting
 app.use('/api/', globalLimiter);

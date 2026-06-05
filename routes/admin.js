@@ -777,14 +777,14 @@ router.get('/rate-limit-info', authenticate, authorize(['superadmin']), (req, re
         {
           name: 'Global API Limiter',
           window: '5 minutes',
-          maxRequests: 1000,
+          maxRequests: 150,
           description: 'Overall API request limit',
           autoResetTime: '5 minutes'
         },
         {
           name: 'Authentication Limiter',
           window: '5 minutes',
-          maxRequests: 100,
+          maxRequests: 15,
           description: 'Login/signup attempts',
           autoResetTime: '5 minutes',
           skipSuccessful: true
@@ -792,28 +792,28 @@ router.get('/rate-limit-info', authenticate, authorize(['superadmin']), (req, re
         {
           name: 'Transaction Limiter',
           window: '1 hour',
-          maxRequests: 100,
+          maxRequests: 30,
           description: 'Recharge/withdrawal requests',
           autoResetTime: '1 hour'
         },
         {
           name: 'Admin Actions Limiter',
           window: '1 minute',
-          maxRequests: 60,
+          maxRequests: 30,
           description: 'Admin operations',
           autoResetTime: '1 minute'
         },
         {
           name: 'Finance Limiter',
           window: '5 minutes',
-          maxRequests: 60,
+          maxRequests: 30,
           description: 'Finance operations',
           autoResetTime: '5 minutes'
         },
         {
           name: 'Password Reset Limiter',
           window: '1 hour',
-          maxRequests: 10,
+          maxRequests: 5,
           description: 'Password reset requests',
           autoResetTime: '1 hour'
         }

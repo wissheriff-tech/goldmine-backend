@@ -6,6 +6,8 @@ const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
 
+const emailService = require('../utils/emailService');
+
 const router = express.Router();
 
 // Generate backup codes
@@ -33,7 +35,7 @@ function generate6DigitCode() {
 // Enable 2FA
 router.post('/2fa/enable', authenticate, async (req, res) => {
   try {
-    const { method = 'app' } = req.body;
+    const { method = 'app', email } = req.body;
     const user = await User.findByPk(req.user.id);
 
     if (!user) {
@@ -44,12 +46,17 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
       return res.status(400).json({ message: '2FA is already enabled' });
     }
 
+    // Save provided email to user if not already set
+    if (method === 'email' && email && !user.email) {
+      await user.update({ email: email.toLowerCase() });
+    }
+
     // Check if user has email/phone for SMS/Email method
     if (method === 'sms' && !user.phone) {
       return res.status(400).json({ message: 'Phone number required for SMS 2FA' });
     }
 
-    if (method === 'email' && !user.email) {
+    if (method === 'email' && !(user.email || email)) {
       return res.status(400).json({ message: 'Email required for Email 2FA' });
     }
 
@@ -92,7 +99,9 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
         twoFactorExpires: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
       });
 
-      logger.info(`2FA code sent to ${user.phone || user.email}: ${code}`);
+      const recipientEmail = user.email || email;
+      await emailService.send2FACode(recipientEmail, user.username, code);
+      logger.info(`2FA setup code sent to ${recipientEmail}`);
 
       res.json({
         message: `Verification code sent to your ${method === 'sms' ? 'phone' : 'email'}`,

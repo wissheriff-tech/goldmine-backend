@@ -14,6 +14,15 @@ const REMEMBER_ME_REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 
+const IS_PROD = process.env.NODE_ENV === 'production';
+const setCookies = (res, accessToken, refreshToken, rememberMe = false) => {
+  const accessMaxAge  = rememberMe ? 30 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  const refreshMaxAge = rememberMe ? 90 * 24 * 60 * 60 * 1000 :  7 * 24 * 60 * 60 * 1000;
+  const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'strict' : 'lax' };
+  res.cookie('access_token',  accessToken,  { ...base, maxAge: accessMaxAge });
+  res.cookie('refresh_token', refreshToken, { ...base, maxAge: refreshMaxAge, path: '/api/auth/refresh' });
+};
+
 const issueTokens = async (user, rememberMe = false, deviceInfo = null) => {
   const accessToken  = crypto.randomBytes(48).toString('hex');
   const refreshToken = crypto.randomBytes(48).toString('hex');
@@ -91,7 +100,6 @@ router.post('/signup', validateSignup, async (req, res) => {
         referred_by: referred_by || null,
         status: 'pending',
         email: email ? email.toLowerCase() : null,
-        authProvider: 'local',
         emailVerificationToken: verificationToken,
         emailVerificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
       });
@@ -191,16 +199,12 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
     await user.save();
 
     const { token, refreshToken } = await issueTokens(user, rememberMe, req.headers['user-agent']);
+    setCookies(res, token, refreshToken, rememberMe);
 
     logger.info(`User logged in: ${username} (${user.role})`);
 
-    // Determine redirect path based on role
     let redirectTo = '/dashboard';
-    if (user.role === 'superadmin') {
-      redirectTo = '/admin';
-    } else if (user.role === 'admin' || user.role === 'finance') {
-      redirectTo = '/admin';
-    }
+    if (user.role === 'superadmin' || user.role === 'admin' || user.role === 'finance') redirectTo = '/admin';
 
     res.json({
       message: 'Login successful',
@@ -253,6 +257,8 @@ router.post('/refresh', async (req, res) => {
       last_activity:     new Date()
     });
 
+    const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'strict' : 'lax' };
+    res.cookie('access_token', newAccessToken, { ...base, maxAge: accessTtl });
     res.json({ token: newAccessToken });
   } catch (error) {
     logger.error('Token refresh error:', error);
@@ -354,6 +360,42 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
   } catch (error) {
     logger.error('2FA verification error:', error);
     res.status(500).json({ message: 'Error verifying 2FA code', error: error.message });
+  }
+});
+
+// @route   POST /api/auth/resend-2fa
+// @desc    Resend login 2FA code
+// @access  Public
+router.post('/resend-2fa', authLimiter, async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID is required' });
+    }
+
+    const user = await User.scope('withSecrets').findByPk(userId);
+
+    if (!user || !user.twoFactorEnabled) {
+      return res.status(400).json({ message: 'Invalid request' });
+    }
+
+    if (!user.email) {
+      return res.status(400).json({ message: 'No email on file for this account' });
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    user.twoFactorCode = code;
+    user.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000);
+    await user.save();
+
+    await emailService.send2FACode(user.email, user.username, code);
+
+    logger.info(`2FA code resent for user ${user.username}`);
+    res.json({ message: '2FA code resent to your email' });
+  } catch (error) {
+    logger.error('Resend 2FA error:', error);
+    res.status(500).json({ message: 'Error resending 2FA code' });
   }
 });
 
@@ -551,6 +593,8 @@ router.post('/logout', authenticate, async (req, res) => {
   try {
     const token = req.headers.authorization.split(' ')[1];
     await Session.update({ is_active: false }, { where: { access_token: hashToken(token) } });
+    res.clearCookie('access_token');
+    res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
     logger.info(`User logged out: ${req.user.username}`);
     res.json({ message: 'Logged out successfully' });
   } catch (error) {

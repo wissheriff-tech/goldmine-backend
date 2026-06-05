@@ -7,12 +7,16 @@ const hashToken = (token) => crypto.createHash('sha256').update(token).digest('h
 
 const authenticate = async (req, res, next) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'Authentication required' });
+    // Cookie takes priority (httpOnly); Bearer header accepted as fallback for API clients
+    let token = req.cookies?.access_token;
+    if (!token) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ message: 'Authentication required' });
+      }
+      token = authHeader.split(' ')[1];
     }
 
-    const token = authHeader.split(' ')[1];
     const tokenHash = hashToken(token);
 
     const session = await Session.findOne({
