@@ -192,6 +192,12 @@ const initDb = async () => {
         referral_code: 'ADMIN00001',
         status: 'active',
       });
+      logger.info('Vercel DB: superadmin created');
+    } else {
+      // Always sync password from env so rotating SUPER_ADMIN_PASSWORD takes effect
+      admin.password_hash = process.env.SUPER_ADMIN_PASSWORD;
+      await admin.save();
+      logger.info('Vercel DB: superadmin password synced');
     }
     dbReady = true;
     logger.info('Vercel DB: ready');
