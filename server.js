@@ -163,9 +163,13 @@ if (!isVercel) {
 }
 
 // Import Routes
+process.stderr.write('BOOT:9 routes start\n');
 const authRoutes = require('./routes/auth');
+process.stderr.write('BOOT:10 auth ok\n');
 const userRoutes = require('./routes/user');
+process.stderr.write('BOOT:11 user ok\n');
 const adminRoutes = require('./routes/admin');
+process.stderr.write('BOOT:12 admin ok\n');
 const financeRoutes = require('./routes/finance');
 const verificatorRoutes = require('./routes/verificator');
 const approvalRoutes = require('./routes/approval');
@@ -176,8 +180,11 @@ const analyticsRoutes = require('./routes/analytics');
 const batchRoutes = require('./routes/batch');
 const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
+process.stderr.write('BOOT:13 pre-chat\n');
 const chatRoutes = require('./routes/chat');
+process.stderr.write('BOOT:14 post-chat\n');
 const depositRoutes = require('./routes/deposit');
+process.stderr.write('BOOT:15 all routes done\n');
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
