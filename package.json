@@ -23,7 +23,7 @@
   "author": "SalonMoney Team",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "20.x"
   },
   "dependencies": {
     "axios": "^1.13.4",
