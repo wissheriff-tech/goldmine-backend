@@ -1,23 +1,25 @@
-process.on('uncaughtException', (err) => { console.error('UNCAUGHT:', err.message, '\n', err.stack); });
-process.on('unhandledRejection', (r) => { console.error('UNHANDLED_REJECTION:', r?.message || r); });
+const bootLog = [];
+const b = (s) => { bootLog.push(s); process.stderr.write('B:' + s + '\n'); };
+process.on('uncaughtException', (err) => { b('UNCAUGHT:' + err.message); console.error('UNCAUGHT:', err.message, err.stack); });
+process.on('unhandledRejection', (r) => { b('REJECT:' + (r?.message||r)); console.error('UNHANDLED_REJECTION:', r?.message||r); });
 
 // Force pg into ncc bundle
-process.stderr.write('BOOT:1 pg\n');
+b('1-pg');
 require("pg");
-process.stderr.write('BOOT:2 express\n');
+b('2-express');
 const express = require('express');
 const path = require('path');
 const http = require('http');
 const cors = require('cors');
-process.stderr.write('BOOT:3 cookie/compress/dotenv\n');
+b('3-cookie');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const dotenv = require('dotenv');
-process.stderr.write('BOOT:4 logger\n');
+b('4-logger');
 const logger = require('./utils/logger');
-process.stderr.write('BOOT:5 emailService\n');
+b('5-email');
 const emailService = require('./utils/emailService');
-process.stderr.write('BOOT:6 security\n');
+b('6-security');
 
 // Security middleware
 const {
@@ -27,9 +29,9 @@ const {
   validateContentType,
   preventParameterPollution
 } = require('./middleware/security');
-process.stderr.write('BOOT:7 auth\n');
+b('7-auth');
 const { authenticate } = require('./middleware/auth');
-process.stderr.write('BOOT:8 done\n');
+b('8-done');
 
 dotenv.config();
 
@@ -52,7 +54,7 @@ const server = http.createServer(app);
 
 // Debug endpoint — before ALL middleware, no deps
 app.get('/api/debug', (req, res) => {
-  res.json({ ok: true, node: process.version, env: process.env.NODE_ENV, isVercel });
+  res.json({ ok: true, node: process.version, env: process.env.NODE_ENV, isVercel, bootLog });
 });
 
 // Trust proxy - Important for rate limiting behind reverse proxies
@@ -163,14 +165,15 @@ if (!isVercel) {
 }
 
 // Import Routes
-process.stderr.write('BOOT:9 routes start\n');
+b('9-routes');
 const authRoutes = require('./routes/auth');
-process.stderr.write('BOOT:10 auth ok\n');
+b('10-auth');
 const userRoutes = require('./routes/user');
-process.stderr.write('BOOT:11 user ok\n');
+b('11-user');
 const adminRoutes = require('./routes/admin');
-process.stderr.write('BOOT:12 admin ok\n');
+b('12-admin');
 const financeRoutes = require('./routes/finance');
+b('13-finance');
 const verificatorRoutes = require('./routes/verificator');
 const approvalRoutes = require('./routes/approval');
 const productsRoutes = require('./routes/products');
@@ -180,11 +183,11 @@ const analyticsRoutes = require('./routes/analytics');
 const batchRoutes = require('./routes/batch');
 const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
-process.stderr.write('BOOT:13 pre-chat\n');
+b('14-pre-chat');
 const chatRoutes = require('./routes/chat');
-process.stderr.write('BOOT:14 post-chat\n');
+b('15-post-chat');
 const depositRoutes = require('./routes/deposit');
-process.stderr.write('BOOT:15 all routes done\n');
+b('16-all-routes-done');
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
