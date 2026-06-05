@@ -146,40 +146,54 @@ const securityRoutes = require('./routes/security');
 const chatRoutes = require('./routes/chat');
 const depositRoutes = require('./routes/deposit');
 
+// Ping is always available — no DB dependency
+app.get('/api/ping', (req, res) => {
+  res.json({ ok: true, ready: dbReady, env: process.env.NODE_ENV });
+});
+
 // On Vercel: sync DB + seed admin on first request (lazy init)
 let dbReady = false;
+let dbInitPromise = null;
+
+const initDb = async () => {
+  try {
+    await sequelize.authenticate();
+    logger.info('Vercel DB: authenticated');
+    await sequelize.sync({ force: false });
+    logger.info('Vercel DB: synced');
+    const admin = await User.findOne({ where: { username: 'superadmin' } });
+    if (!admin) {
+      await User.create({
+        username: 'superadmin',
+        phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
+        email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
+        password_hash: process.env.SUPER_ADMIN_PASSWORD,
+        role: 'superadmin',
+        referral_code: 'ADMIN00001',
+        status: 'active',
+      });
+    }
+    dbReady = true;
+    logger.info('Vercel DB: ready');
+  } catch (err) {
+    dbInitPromise = null; // allow retry on next request
+    logger.error('Vercel DB init error:', err.message, err.stack);
+    throw err;
+  }
+};
+
 if (isVercel) {
   app.use(async (req, res, next) => {
     if (dbReady) return next();
     try {
-      await sequelize.authenticate();
-      logger.info('Vercel DB: authenticated');
-      await sequelize.sync({ force: false });
-      logger.info('Vercel DB: synced');
-      const admin = await User.findOne({ where: { username: 'superadmin' } });
-      if (!admin) {
-        await User.create({
-          username: 'superadmin',
-          phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
-          email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
-          password_hash: process.env.SUPER_ADMIN_PASSWORD,
-          role: 'superadmin',
-          referral_code: 'ADMIN00001',
-          status: 'active',
-        });
-      }
-      dbReady = true;
-      logger.info('Vercel DB: ready');
+      if (!dbInitPromise) dbInitPromise = initDb();
+      await dbInitPromise;
     } catch (err) {
-      logger.error('Vercel DB init error:', err.message, err.stack?.split('\n')[1]);
+      return res.status(503).json({ message: 'Service initializing, please retry', error: err.message });
     }
     next();
   });
 }
-
-app.get('/api/ping', (req, res) => {
-  res.json({ ok: true, ready: dbReady });
-});
 
 // Register Routes
 app.use('/api/auth', authRoutes);
