@@ -31,11 +31,16 @@ router.get('/users', authenticate, authorize(['superadmin']), async (req, res) =
     if (status) filter.status = status;
     if (role) filter.role = role;
 
+    // HIGH FIX: cap pagination limit to prevent unbounded result sets
+    const MAX_PAGE_SIZE = 100;
+    const parsedLimit = Math.min(Math.max(1, parseInt(limit) || 20), MAX_PAGE_SIZE);
+    const parsedSkip = Math.max(0, parseInt(skip) || 0);
+
     const users = await User.findAll({
       where: filter,
       attributes: { exclude: ['password_hash'] },
-      limit: parseInt(limit),
-      offset: parseInt(skip)
+      limit: parsedLimit,
+      offset: parsedSkip
     });
 
     const total = await User.count({ where: filter });
@@ -44,8 +49,8 @@ router.get('/users', authenticate, authorize(['superadmin']), async (req, res) =
       users,
       pagination: {
         total,
-        limit: parseInt(limit),
-        skip: parseInt(skip)
+        limit: parsedLimit,
+        skip: parsedSkip
       }
     });
   } catch (error) {
@@ -395,6 +400,11 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
     if (type) filter.type = type;
     if (status) filter.status = status;
 
+    // HIGH FIX: cap pagination limit to prevent unbounded result sets
+    const MAX_PAGE_SIZE = 100;
+    const parsedLimit = Math.min(Math.max(1, parseInt(limit) || 20), MAX_PAGE_SIZE);
+    const parsedSkip = Math.max(0, parseInt(skip) || 0);
+
     const transactions = await Transaction.findAll({
       where: filter,
       include: [
@@ -402,8 +412,8 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
         { model: User, as: 'approver', attributes: ['phone'] }
       ],
       order: [['timestamp', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(skip)
+      limit: parsedLimit,
+      offset: parsedSkip
     });
 
     const total = await Transaction.count({ where: filter });
@@ -412,8 +422,8 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
       transactions,
       pagination: {
         total,
-        limit: parseInt(limit),
-        skip: parseInt(skip)
+        limit: parsedLimit,
+        skip: parsedSkip
       }
     });
   } catch (error) {

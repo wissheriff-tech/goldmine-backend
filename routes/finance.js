@@ -27,6 +27,11 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
     if (type) filter.type = type;
     if (status) filter.status = status;
 
+    // MEDIUM FIX: cap pagination limit to prevent unbounded result sets
+    const MAX_PAGE_SIZE = 100;
+    const parsedLimit = Math.min(Math.max(1, parseInt(limit) || 20), MAX_PAGE_SIZE);
+    const parsedSkip = Math.max(0, parseInt(skip) || 0);
+
     const transactions = await Transaction.findAll({
       where: filter,
       include: [
@@ -34,8 +39,8 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
         { model: User, as: 'approver', attributes: ['phone'] }
       ],
       order: [['timestamp', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(skip)
+      limit: parsedLimit,
+      offset: parsedSkip
     });
 
     const total = await Transaction.count({ where: filter });
@@ -44,8 +49,8 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
       transactions,
       pagination: {
         total,
-        limit: parseInt(limit),
-        skip: parseInt(skip)
+        limit: parsedLimit,
+        skip: parsedSkip
       }
     });
   } catch (error) {
@@ -202,11 +207,16 @@ router.get('/users', authenticate, authorize(['superadmin', 'finance']), async (
 
     if (status) filter.status = status;
 
+    // MEDIUM FIX: cap pagination limit to prevent unbounded result sets
+    const MAX_PAGE_SIZE = 100;
+    const parsedLimit = Math.min(Math.max(1, parseInt(limit) || 50), MAX_PAGE_SIZE);
+    const parsedSkip = Math.max(0, parseInt(skip) || 0);
+
     const users = await User.findAll({
       where: filter,
       attributes: { exclude: ['password_hash'] },
-      limit: parseInt(limit),
-      offset: parseInt(skip),
+      limit: parsedLimit,
+      offset: parsedSkip,
       order: [['created_at', 'DESC']]
     });
 
@@ -216,8 +226,8 @@ router.get('/users', authenticate, authorize(['superadmin', 'finance']), async (
       users,
       pagination: {
         total,
-        limit: parseInt(limit),
-        skip: parseInt(skip)
+        limit: parsedLimit,
+        skip: parsedSkip
       }
     });
   } catch (error) {
@@ -442,6 +452,11 @@ router.get('/activity-log', authenticate, authorize(['superadmin']), async (req,
   try {
     const { limit = 50, skip = 0 } = req.query;
 
+    // MEDIUM FIX: cap pagination limit
+    const MAX_PAGE_SIZE = 100;
+    const parsedLimit = Math.min(Math.max(1, parseInt(limit) || 50), MAX_PAGE_SIZE);
+    const parsedSkip = Math.max(0, parseInt(skip) || 0);
+
     // Get all transactions approved by finance users
     const financeUsers = await User.findAll({
       where: { role: 'finance' },
@@ -458,8 +473,8 @@ router.get('/activity-log', authenticate, authorize(['superadmin']), async (req,
         { model: User, as: 'approver', attributes: ['phone', 'username'] }
       ],
       order: [['completed_at', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(skip)
+      limit: parsedLimit,
+      offset: parsedSkip
     });
 
     const total = await Transaction.count({
@@ -472,8 +487,8 @@ router.get('/activity-log', authenticate, authorize(['superadmin']), async (req,
       activities,
       pagination: {
         total,
-        limit: parseInt(limit),
-        skip: parseInt(skip)
+        limit: parsedLimit,
+        skip: parsedSkip
       }
     });
   } catch (error) {

@@ -80,11 +80,15 @@ router.get('/transactions', authenticate, async (req, res) => {
     if (type) where.type = type;
     if (status) where.status = status;
 
+    // HIGH FIX: cap pagination limit to prevent unbounded result sets
+    const MAX_PAGE_SIZE = 100;
+    const parsedLimit = Math.min(Math.max(1, parseInt(limit) || 20), MAX_PAGE_SIZE);
+
     const { count: total, rows: transactions } = await Transaction.findAndCountAll({
       where,
       order: [['timestamp', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(skip),
+      limit: parsedLimit,
+      offset: Math.max(0, parseInt(skip) || 0),
       include: [{ model: User, as: 'approver', attributes: ['phone'] }]
     });
 
@@ -92,8 +96,8 @@ router.get('/transactions', authenticate, async (req, res) => {
       transactions,
       pagination: {
         total,
-        limit: parseInt(limit),
-        skip: parseInt(skip)
+        limit: parsedLimit,
+        skip: Math.max(0, parseInt(skip) || 0)
       }
     });
   } catch (error) {
@@ -335,6 +339,8 @@ router.get('/referrals', authenticate, async (req, res) => {
 router.get('/referrals/leaderboard', authenticate, async (req, res) => {
   try {
     const { period = 'all', limit = 50 } = req.query;
+    // MEDIUM FIX: cap leaderboard limit to prevent unbounded result sets
+    const MAX_LEADERBOARD_SIZE = 100;
 
     // Calculate date filter based on period
     let dateFilter = {};
@@ -368,7 +374,7 @@ router.get('/referrals/leaderboard', authenticate, async (req, res) => {
       }],
       group: ['referrer_id', 'referrer.id'],
       order: [[sequelize.fn('SUM', sequelize.col('bonus_NSL')), 'DESC']],
-      limit: parseInt(limit)
+      limit: Math.min(Math.max(1, parseInt(limit) || 50), MAX_LEADERBOARD_SIZE)
     });
 
     const rankedLeaderboard = leaderboardData.map((entry, index) => ({

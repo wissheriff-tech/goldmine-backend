@@ -55,6 +55,7 @@ const {
 // Security Middleware
 const {
   authLimiter,
+  signupLimiter,
   passwordResetLimiter
 } = require('../middleware/security');
 
@@ -66,7 +67,8 @@ const generateReferralCode = () => {
 };
 
 // Sign up
-router.post('/signup', validateSignup, async (req, res) => {
+// HIGH FIX: signupLimiter prevents account-creation spam
+router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
   try {
     const { username, phone, password, referred_by, email } = req.body;
 
@@ -589,12 +591,22 @@ router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
 });
 
 // Logout — invalidate current session
+// HIGH FIX: Read token from cookie first (primary auth path), fall back to Bearer header.
+// This ensures the session is always invalidated regardless of which transport was used.
 router.post('/logout', authenticate, async (req, res) => {
   try {
-    const token = req.headers.authorization.split(' ')[1];
-    await Session.update({ is_active: false }, { where: { access_token: hashToken(token) } });
-    res.clearCookie('access_token');
-    res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+    // Cookie takes priority (same logic as authenticate middleware)
+    let token = req.cookies?.access_token;
+    if (!token && req.headers.authorization?.startsWith('Bearer ')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+    if (token) {
+      await Session.update({ is_active: false }, { where: { access_token: hashToken(token) } });
+    }
+    const IS_PROD_COOKIE = process.env.NODE_ENV === 'production';
+    const base = { httpOnly: true, secure: IS_PROD_COOKIE, sameSite: IS_PROD_COOKIE ? 'strict' : 'lax' };
+    res.clearCookie('access_token', base);
+    res.clearCookie('refresh_token', { ...base, path: '/api/auth/refresh' });
     logger.info(`User logged out: ${req.user.username}`);
     res.json({ message: 'Logged out successfully' });
   } catch (error) {

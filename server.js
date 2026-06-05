@@ -83,8 +83,18 @@ app.use(requestLogger); // Log all requests
 app.use(validateContentType); // Validate content types
 
 // Serve uploaded files — authenticated route only (no unauthenticated static access)
+// C-2 FIX: sanitize the path segment to prevent path traversal attacks
 app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, (req, res) => {
-  const filePath = path.join(__dirname, req.path);
+  // Extract only the captured path segment (everything after /uploads/)
+  const rawSegment = req.params[0] || '';
+  // Normalize and strip any leading slashes, then resolve against the uploads dir
+  const uploadsDir = path.join(__dirname, 'uploads');
+  const requestedPath = path.normalize(rawSegment).replace(/^(\.\.[/\\])+/, '');
+  const filePath = path.join(uploadsDir, requestedPath);
+  // Ensure the resolved path is still inside the uploads directory
+  if (!filePath.startsWith(uploadsDir + path.sep) && filePath !== uploadsDir) {
+    return res.status(403).json({ message: 'Access denied' });
+  }
   res.sendFile(filePath, (err) => {
     if (err) res.status(404).json({ message: 'File not found' });
   });
@@ -187,12 +197,14 @@ const initDb = async () => {
       });
       logger.info('Vercel DB: superadmin created');
     } else {
-      admin.password_hash = process.env.SUPER_ADMIN_PASSWORD;
-      // Replace hardcoded default referral code with a random one
+      // C-4 FIX: Only update the referral code if it is still the default placeholder.
+      // Never reset the password on cold start — password changes must be explicit.
+      let changed = false;
       if (admin.referral_code === 'ADMIN00001') {
         admin.referral_code = genCode();
+        changed = true;
       }
-      await admin.save();
+      if (changed) await admin.save();
       logger.info('Vercel DB: superadmin synced');
     }
     dbReady = true;

@@ -123,6 +123,41 @@ const passwordResetLimiter = rateLimit({
 });
 
 /**
+ * Signup Rate Limiter — HIGH FIX
+ * Prevents account creation spam / enumeration.
+ */
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  skipSuccessfulRequests: false,
+  message: 'Too many accounts created from this IP.',
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      message: 'Too many signup attempts. Please try again later.',
+      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+    });
+  }
+});
+
+/**
+ * Deposit Submit Rate Limiter — HIGH FIX
+ * Limits how many deposit submissions a user/IP can make per window.
+ */
+const depositLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 10,
+  message: 'Too many deposit submissions.',
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      message: 'Too many deposit submissions. Please wait before submitting again.',
+      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+    });
+  }
+});
+
+/**
  * IP Whitelist Middleware (for admin routes in production)
  */
 const ipWhitelist = (allowedIPs = []) => {
@@ -220,6 +255,8 @@ module.exports = {
   securityHeaders,
   globalLimiter,
   authLimiter,
+  signupLimiter,
+  depositLimiter,
   transactionLimiter,
   adminLimiter,
   financeLimiter,

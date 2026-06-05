@@ -5,7 +5,8 @@ const fs = require('fs');
 const crypto = require('crypto');
 const https = require('https');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
-const { DepositProof, User, Transaction } = require('../models');
+const { depositLimiter } = require('../middleware/security');
+const { DepositProof, User, Transaction, sequelize } = require('../models');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 
@@ -97,7 +98,8 @@ router.get('/wallet-info', authenticate, async (req, res) => {
 });
 
 // POST /api/deposit/submit — user submits deposit proof
-router.post('/submit', authenticate, upload.single('receipt'), async (req, res) => {
+// HIGH FIX: depositLimiter prevents submission spam
+router.post('/submit', authenticate, depositLimiter, upload.single('receipt'), async (req, res) => {
   try {
     const { amount, txid, notes } = req.body;
 
@@ -166,50 +168,90 @@ router.get('/pending', authenticate, authorizeRoles('admin', 'superadmin', 'fina
 });
 
 // PATCH /api/deposit/:id/approve — admin approves deposit
+// C-3 FIX: entire approve action runs inside a serializable DB transaction with row-level
+// locking (SELECT … FOR UPDATE) so concurrent admin approvals cannot double-credit a deposit.
 router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin', 'finance'), async (req, res) => {
+  const { approved_amount, notes } = req.body;
+  const { Op } = require('sequelize');
+
+  let nslAmountResult;
   try {
-    const { approved_amount, notes } = req.body;
-    const proof = await DepositProof.findByPk(req.params.id);
+    await sequelize.transaction({ isolationLevel: sequelize.constructor.Transaction.ISOLATION_LEVELS.SERIALIZABLE }, async (t) => {
+      // Lock the deposit proof row so concurrent requests are serialized
+      const proof = await DepositProof.findOne({
+        where: { id: req.params.id },
+        lock: t.LOCK.UPDATE,
+        transaction: t
+      });
 
-    if (!proof) return res.status(404).json({ message: 'Deposit proof not found' });
-    if (proof.status !== 'pending') return res.status(400).json({ message: 'Deposit already processed' });
+      if (!proof) {
+        const err = new Error('Deposit proof not found');
+        err.status = 404;
+        throw err;
+      }
+      if (proof.status !== 'pending') {
+        const err = new Error('Deposit already processed');
+        err.status = 400;
+        throw err;
+      }
 
-    const amount = parseFloat(approved_amount || proof.user_submitted_amount);
-    const nslRate = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
-    const feePercent = parseFloat(process.env.RECHARGE_FEE_PERCENTAGE || 10);
-    const amountAfterFee = amount * (1 - feePercent / 100);
-    const nslAmount = amountAfterFee * nslRate;
+      const amount = parseFloat(approved_amount || proof.user_submitted_amount);
+      const nslRate = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
+      const feePercent = parseFloat(process.env.RECHARGE_FEE_PERCENTAGE || 10);
+      const amountAfterFee = amount * (1 - feePercent / 100);
+      const nslAmount = amountAfterFee * nslRate;
 
-    const user = await User.findByPk(proof.user_id);
-    if (!user) return res.status(404).json({ message: 'User not found' });
+      // Lock the user row as well to prevent concurrent balance updates
+      const user = await User.findOne({
+        where: { id: proof.user_id },
+        lock: t.LOCK.UPDATE,
+        transaction: t
+      });
+      if (!user) {
+        const err = new Error('User not found');
+        err.status = 404;
+        throw err;
+      }
 
-    await proof.approve(req.user.id, { amount, currency: 'USDT', transaction_id: `DEP-${proof.id}` });
-    proof.admin_notes = notes || null;
-    await proof.save();
+      // Mark proof approved inside the transaction
+      proof.status = 'approved';
+      proof.reviewed_by = req.user.id;
+      proof.reviewed_at = new Date();
+      proof.approved_amount = amount;
+      proof.approved_currency = 'USDT';
+      proof.approved_transaction_id = `DEP-${proof.id}`;
+      proof.admin_notes = notes || null;
+      await proof.save({ transaction: t });
 
-    user.balance_NSL = parseFloat(user.balance_NSL) + nslAmount;
-    await user.save();
+      // Credit balance inside the same transaction
+      user.balance_NSL = parseFloat(user.balance_NSL) + nslAmount;
+      await user.save({ transaction: t });
 
-    await Transaction.create({
-      user_id: user.id,
-      type: 'recharge',
-      amount_NSL: nslAmount,
-      amount_usdt: amount,
-      status: 'approved',
-      notes: `Deposit approved. ${amount} USDT → ${nslAmount.toFixed(4)} NSL (${feePercent}% fee)`
+      await Transaction.create({
+        user_id: user.id,
+        type: 'recharge',
+        amount_NSL: nslAmount,
+        amount_usdt: amount,
+        status: 'approved',
+        notes: `Deposit approved. ${amount} USDT → ${nslAmount.toFixed(4)} NSL (${feePercent}% fee)`
+      }, { transaction: t });
+
+      nslAmountResult = { nslAmount, user, amount, feePercent };
+      logger.info(`Deposit ${proof.id} approved for user ${user.username}: ${amount} USDT → ${nslAmount} NSL`);
     });
 
-    logger.info(`Deposit ${proof.id} approved for user ${user.username}: ${amount} USDT → ${nslAmount} NSL`);
+    const { nslAmount, user, amount } = nslAmountResult;
 
     if (user.email) {
       emailService.sendTransactionApproved(user.email, user.username, 'deposit', nslAmount, amount, user.balance_NSL)
         .catch(err => logger.error('Deposit approval email failed:', err));
     }
 
-    res.json({ success: true, message: 'Deposit approved and balance credited', nsl_credited: nslAmount });
+    res.json({ success: true, message: 'Deposit approved and balance credited', nsl_credited: nslAmountResult.nslAmount });
   } catch (error) {
     logger.error('Deposit approve error:', error);
-    res.status(500).json({ message: 'Error approving deposit', error: error.message });
+    const status = error.status || 500;
+    res.status(status).json({ message: error.message || 'Error approving deposit' });
   }
 });
 

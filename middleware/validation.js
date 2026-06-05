@@ -329,6 +329,12 @@ const updateProfileSchema = Joi.object({
     .lowercase()
     .optional(),
 
+  // MEDIUM FIX: validate phone format to prevent injection of arbitrary strings
+  phone: Joi.string()
+    .pattern(/^\+?[0-9]{10,15}$/)
+    .optional()
+    .messages({ 'string.pattern.base': 'Phone number must be 10-15 digits' }),
+
   profile_photo: Joi.string()
     .pattern(/^\/uploads\/[a-zA-Z0-9_\-./]+$/)
     .optional()
