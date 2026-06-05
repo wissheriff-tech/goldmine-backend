@@ -5,6 +5,7 @@ const sequelize = require('sequelize');
 const bcrypt = require('bcryptjs');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const emailService = require('../utils/emailService');
 
 // Validation and Security Middleware
 const {
@@ -858,5 +859,84 @@ router.post('/reset-limits', authenticate, authorize(['superadmin']), async (req
   }
 });
 // ----------------------------
+
+// KYC: List users with pending review (docs uploaded, not yet verified)
+router.get('/kyc/pending', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
+  try {
+    const users = await User.findAll({
+      where: {
+        kyc_verified: false,
+        [Op.or]: [
+          { kyc_id_front: { [Op.ne]: null } },
+          { kyc_selfie: { [Op.ne]: null } }
+        ]
+      },
+      attributes: ['id', 'username', 'phone', 'email', 'kyc_verified', 'kyc_id_front', 'kyc_id_back', 'kyc_selfie', 'kyc_additional', 'created_at'],
+      order: [['created_at', 'ASC']]
+    });
+    res.json({ success: true, data: users, total: users.length });
+  } catch (error) {
+    logger.error('KYC pending list error:', error);
+    res.status(500).json({ message: 'Error fetching pending KYC submissions' });
+  }
+});
+
+// KYC: Approve a user's documents
+router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'admin']), adminLimiter, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.params.userId, {
+      attributes: { exclude: ['password_hash'] }
+    });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.kyc_verified) return res.status(400).json({ message: 'KYC already verified' });
+
+    await user.update({ kyc_verified: true });
+
+    logger.info(`KYC approved for user ${user.username} by admin ${req.user.username}`);
+
+    if (user.email) {
+      emailService.sendKYCApproved(user.email, user.username)
+        .catch(err => logger.error('KYC approval email failed:', err));
+    }
+
+    res.json({ success: true, message: 'KYC approved', user });
+  } catch (error) {
+    logger.error('KYC approve error:', error);
+    res.status(500).json({ message: 'Error approving KYC' });
+  }
+});
+
+// KYC: Reject a user's documents
+router.patch('/kyc/:userId/reject', authenticate, authorize(['superadmin', 'admin']), adminLimiter, async (req, res) => {
+  try {
+    const { reason } = req.body;
+    if (!reason) return res.status(400).json({ message: 'Rejection reason is required' });
+
+    const user = await User.findByPk(req.params.userId, {
+      attributes: { exclude: ['password_hash'] }
+    });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    await user.update({
+      kyc_verified: false,
+      kyc_id_front: null,
+      kyc_id_back: null,
+      kyc_selfie: null,
+      kyc_additional: null
+    });
+
+    logger.info(`KYC rejected for user ${user.username} by admin ${req.user.username}: ${reason}`);
+
+    if (user.email) {
+      emailService.sendKYCRejected(user.email, user.username, reason)
+        .catch(err => logger.error('KYC rejection email failed:', err));
+    }
+
+    res.json({ success: true, message: 'KYC rejected and documents cleared' });
+  } catch (error) {
+    logger.error('KYC reject error:', error);
+    res.status(500).json({ message: 'Error rejecting KYC' });
+  }
+});
 
 module.exports = router;

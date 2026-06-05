@@ -113,6 +113,27 @@ class EmailService {
     `));
   }
 
+  async sendKYCApproved(email, username) {
+    await this.send(email, 'KYC Verified — SalonMoney', wrap(`
+      <h2 style="color:#333;margin-top:0">✅ Identity Verified</h2>
+      <p style="color:#555">Hi ${username},</p>
+      <p style="color:#555">Your identity documents have been reviewed and your KYC verification is complete.</p>
+      <p style="color:#555">You now have full access to all SalonMoney features.</p>
+      ${btn(`${FRONTEND}/dashboard`, 'Go to Dashboard')}
+    `));
+  }
+
+  async sendKYCRejected(email, username, reason) {
+    await this.send(email, 'KYC Verification Failed — SalonMoney', wrap(`
+      <h2 style="color:#333;margin-top:0">❌ KYC Verification Failed</h2>
+      <p style="color:#555">Hi ${username},</p>
+      <p style="color:#555">We were unable to verify your identity documents.</p>
+      ${reason ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;margin:16px 0"><p style="color:#991b1b;margin:0"><strong>Reason:</strong> ${reason}</p></div>` : ''}
+      <p style="color:#555">Please resubmit clear, valid documents and try again.</p>
+      ${btn(`${FRONTEND}/account/security`, 'Resubmit Documents')}
+    `));
+  }
+
   async sendDailyIncomeSummary(email, username, incomeNSL, newBalanceNSL) {
     await this.send(email, 'Daily Income Credited — SalonMoney', wrap(`
       <h2 style="color:#333;margin-top:0">💰 Daily Income Credited</h2>
