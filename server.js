@@ -1,25 +1,17 @@
-const bootLog = [];
-const b = (s) => { bootLog.push(s); process.stderr.write('B:' + s + '\n'); };
-process.on('uncaughtException', (err) => { b('UNCAUGHT:' + err.message); console.error('UNCAUGHT:', err.message, err.stack); });
-process.on('unhandledRejection', (r) => { b('REJECT:' + (r?.message||r)); console.error('UNHANDLED_REJECTION:', r?.message||r); });
+process.on('uncaughtException', (err) => { console.error('UNCAUGHT:', err.message); });
+process.on('unhandledRejection', (r) => { console.error('UNHANDLED_REJECTION:', r?.message||r); });
 
 // Force pg into ncc bundle
-b('1-pg');
 require("pg");
-b('2-express');
 const express = require('express');
 const path = require('path');
 const http = require('http');
 const cors = require('cors');
-b('3-cookie');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const dotenv = require('dotenv');
-b('4-logger');
 const logger = require('./utils/logger');
-b('5-email');
 const emailService = require('./utils/emailService');
-b('6-security');
 
 // Security middleware
 const {
@@ -29,9 +21,7 @@ const {
   validateContentType,
   preventParameterPollution
 } = require('./middleware/security');
-b('7-auth');
 const { authenticate } = require('./middleware/auth');
-b('8-done');
 
 dotenv.config();
 
@@ -51,11 +41,6 @@ process.on('unhandledRejection', (reason) => {
 
 const app = express();
 const server = http.createServer(app);
-
-// Debug endpoint — before ALL middleware, no deps
-app.get('/api/debug', (req, res) => {
-  res.json({ ok: true, node: process.version, env: process.env.NODE_ENV, isVercel, bootLog });
-});
 
 // Trust proxy - Important for rate limiting behind reverse proxies
 app.set('trust proxy', 1);
@@ -106,7 +91,7 @@ app.use(requestLogger); // Log all requests
 app.use(validateContentType); // Validate content types
 
 // Serve uploaded files — authenticated route only (no unauthenticated static access)
-app.get('/uploads/*', require('./middleware/auth').authenticate, (req, res) => {
+app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, (req, res) => {
   const filePath = path.join(__dirname, req.path);
   res.sendFile(filePath, (err) => {
     if (err) res.status(404).json({ message: 'File not found' });
@@ -165,15 +150,10 @@ if (!isVercel) {
 }
 
 // Import Routes
-b('9-routes');
 const authRoutes = require('./routes/auth');
-b('10-auth');
 const userRoutes = require('./routes/user');
-b('11-user');
 const adminRoutes = require('./routes/admin');
-b('12-admin');
 const financeRoutes = require('./routes/finance');
-b('13-finance');
 const verificatorRoutes = require('./routes/verificator');
 const approvalRoutes = require('./routes/approval');
 const productsRoutes = require('./routes/products');
@@ -183,11 +163,8 @@ const analyticsRoutes = require('./routes/analytics');
 const batchRoutes = require('./routes/batch');
 const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
-b('14-pre-chat');
 const chatRoutes = require('./routes/chat');
-b('15-post-chat');
 const depositRoutes = require('./routes/deposit');
-b('16-all-routes-done');
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
