@@ -25,8 +25,8 @@ const TwoFactorAuth = sequelize.define('TwoFactorAuth', {
     defaultValue: false
   },
   method: {
-    type: DataTypes.ENUM('app', 'sms', 'email'),
-    defaultValue: 'app'
+    type: DataTypes.ENUM('app', 'email'),
+    defaultValue: 'email'
   },
   verified_at: {
     type: DataTypes.DATE,

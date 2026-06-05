@@ -22,7 +22,6 @@ function generateBackupCodes(count = 10) {
   return codes;
 }
 
-// Generate 2FA secret (simple numeric code for SMS/Email)
 function generate2FASecret() {
   return crypto.randomBytes(16).toString('base64');
 }
@@ -46,18 +45,16 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
       return res.status(400).json({ message: '2FA is already enabled' });
     }
 
-    // Save provided email to user if not already set
-    if (method === 'email' && email && !user.email) {
-      await user.update({ email: email.toLowerCase() });
-    }
-
-    // Check if user has email/phone for SMS/Email method
-    if (method === 'sms' && !user.phone) {
-      return res.status(400).json({ message: 'Phone number required for SMS 2FA' });
+    if (!['app', 'email'].includes(method)) {
+      return res.status(400).json({ message: 'Invalid 2FA method. Supported: email.' });
     }
 
     if (method === 'email' && !(user.email || email)) {
-      return res.status(400).json({ message: 'Email required for Email 2FA' });
+      return res.status(400).json({ message: 'Email required for 2FA' });
+    }
+
+    if (method === 'email' && email && !user.email) {
+      await user.update({ email: email.toLowerCase() });
     }
 
     const secret = generate2FASecret();
@@ -82,8 +79,6 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
       });
     }
 
-    // For app-based 2FA, return the secret for QR code generation
-    // For SMS/Email, send verification code
     if (method === 'app') {
       res.json({
         message: '2FA setup initiated. Please scan the QR code with your authenticator app.',
@@ -104,7 +99,7 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
       logger.info(`2FA setup code sent to ${recipientEmail}`);
 
       res.json({
-        message: `Verification code sent to your ${method === 'sms' ? 'phone' : 'email'}`,
+        message: 'Verification code sent to your email',
         backup_codes: backupCodes.map(c => c.code)
       });
     }
@@ -134,9 +129,8 @@ router.post('/2fa/verify', authenticate, async (req, res) => {
     let isValid = false;
 
     if (twoFA.method === 'app') {
-      return res.status(400).json({ message: 'App-based 2FA is not yet supported. Please use email/SMS method.' });
+      return res.status(400).json({ message: 'App-based 2FA is not yet supported. Please use email.' });
     } else {
-      // For SMS/Email, check the code sent
       if (!user.twoFactorCode || !user.twoFactorExpires) {
         return res.status(400).json({ message: 'No verification code found. Please request a new one.' });
       }
