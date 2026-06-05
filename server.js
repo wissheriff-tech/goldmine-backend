@@ -2,22 +2,22 @@ process.on('uncaughtException', (err) => { console.error('UNCAUGHT:', err.messag
 process.on('unhandledRejection', (r) => { console.error('UNHANDLED_REJECTION:', r?.message || r); });
 
 // Force pg into ncc bundle
-console.log('BOOT:1 requiring pg');
+process.stderr.write('BOOT:1 pg\n');
 require("pg");
-console.log('BOOT:2 requiring express');
+process.stderr.write('BOOT:2 express\n');
 const express = require('express');
 const path = require('path');
 const http = require('http');
 const cors = require('cors');
-console.log('BOOT:3 requiring cookie/compress/dotenv');
+process.stderr.write('BOOT:3 cookie/compress/dotenv\n');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
 const dotenv = require('dotenv');
-console.log('BOOT:4 requiring logger');
+process.stderr.write('BOOT:4 logger\n');
 const logger = require('./utils/logger');
-console.log('BOOT:5 requiring emailService');
+process.stderr.write('BOOT:5 emailService\n');
 const emailService = require('./utils/emailService');
-console.log('BOOT:6 requiring security middleware');
+process.stderr.write('BOOT:6 security\n');
 
 // Security middleware
 const {
@@ -27,9 +27,9 @@ const {
   validateContentType,
   preventParameterPollution
 } = require('./middleware/security');
-console.log('BOOT:7 requiring auth middleware');
+process.stderr.write('BOOT:7 auth\n');
 const { authenticate } = require('./middleware/auth');
-console.log('BOOT:8 all top requires done');
+process.stderr.write('BOOT:8 done\n');
 
 dotenv.config();
 
