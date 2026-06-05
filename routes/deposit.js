@@ -2,12 +2,54 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const https = require('https');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { DepositProof, User, Transaction } = require('../models');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 
 const router = express.Router();
+
+// Cache Binance address for 1 hour to avoid hammering the API
+let walletCache = { address: null, fetchedAt: 0 };
+
+async function getBinanceUSDTAddress() {
+  const ONE_HOUR = 60 * 60 * 1000;
+  if (walletCache.address && Date.now() - walletCache.fetchedAt < ONE_HOUR) {
+    return walletCache.address;
+  }
+
+  const apiKey    = process.env.BINANCE_API_KEY;
+  const secretKey = process.env.BINANCE_SECRET_KEY;
+  if (!apiKey || !secretKey) return null;
+
+  const ts     = Date.now();
+  const params = `coin=USDT&network=TRX&timestamp=${ts}`;
+  const sig    = crypto.createHmac('sha256', secretKey).update(params).digest('hex');
+  const url    = `https://api.binance.com/sapi/v1/capital/deposit/address?${params}&signature=${sig}`;
+
+  return new Promise((resolve) => {
+    const req = https.get(url, { headers: { 'X-MBX-APIKEY': apiKey } }, (res) => {
+      let body = '';
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(body);
+          if (data.address) {
+            walletCache = { address: data.address, fetchedAt: Date.now() };
+            resolve(data.address);
+          } else {
+            logger.error('Binance deposit address error:', body);
+            resolve(null);
+          }
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', (e) => { logger.error('Binance API request failed:', e.message); resolve(null); });
+    req.setTimeout(8000, () => { req.destroy(); resolve(null); });
+  });
+}
 
 // Multer storage for deposit proof images
 const storage = multer.diskStorage({
@@ -35,17 +77,23 @@ const upload = multer({
   }
 });
 
-// GET /api/deposit/wallet-info — returns admin wallet address and QR code path
-router.get('/wallet-info', authenticate, (req, res) => {
-  res.json({
-    success: true,
-    data: {
-      wallet_address: process.env.DEPOSIT_WALLET_ADDRESS || '',
-      network: process.env.DEPOSIT_NETWORK || 'TRC20 (USDT)',
-      qr_code: process.env.DEPOSIT_QR_URL || null,
-      instructions: 'Send USDT to the address above, then upload your transaction proof below.'
-    }
-  });
+// GET /api/deposit/wallet-info — returns Binance USDT TRC20 deposit address
+router.get('/wallet-info', authenticate, async (req, res) => {
+  try {
+    const address = await getBinanceUSDTAddress() || process.env.DEPOSIT_WALLET_ADDRESS || '';
+    res.json({
+      success: true,
+      data: {
+        wallet_address: address,
+        network: 'TRC20 (USDT)',
+        qr_code: process.env.DEPOSIT_QR_URL || null,
+        instructions: 'Send USDT to the address above, then upload your transaction proof below.'
+      }
+    });
+  } catch (error) {
+    logger.error('Wallet info error:', error);
+    res.status(500).json({ message: 'Error fetching wallet info' });
+  }
 });
 
 // POST /api/deposit/submit — user submits deposit proof
