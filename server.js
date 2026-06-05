@@ -48,6 +48,8 @@ app.set('trust proxy', 1);
 // CORS Configuration
 const allowedOrigins = [
   'http://localhost:3000',
+  'https://frontend-smoky-eight-43.vercel.app',
+  'https://getsalonmoney.vercel.app',
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 
