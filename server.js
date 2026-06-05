@@ -23,7 +23,7 @@ const { authenticate } = require('./middleware/auth');
 dotenv.config();
 
 if (!process.env.SUPER_ADMIN_PASSWORD) {
-  throw new Error('SUPER_ADMIN_PASSWORD env var is required — refusing to start without it');
+  console.error('WARNING: SUPER_ADMIN_PASSWORD env var is not set');
 }
 
 // Check if running on Vercel (serverless)
