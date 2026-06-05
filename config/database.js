@@ -16,11 +16,6 @@ if (isProd) {
       ssl: { require: true, rejectUnauthorized: false },
     },
     define: { timestamps: true, underscored: false },
-    pool: {
-      afterCreate: (conn, done) => {
-        conn.query('SET search_path TO backend;', (err) => done(err, conn));
-      },
-    },
   });
 } else {
   // Development: SQLite (zero config, file-based)
