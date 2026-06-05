@@ -1,6 +1,3 @@
-process.on('uncaughtException', (err) => { console.error('UNCAUGHT:', err.message); });
-process.on('unhandledRejection', (r) => { console.error('UNHANDLED_REJECTION:', r?.message||r); });
-
 // Force pg into ncc bundle
 require("pg");
 const express = require('express');
@@ -31,13 +28,6 @@ if (!process.env.SUPER_ADMIN_PASSWORD) {
 
 // Check if running on Vercel (serverless)
 const isVercel = process.env.VERCEL === '1';
-
-process.on('uncaughtException', (err) => {
-  console.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
-});
-process.on('unhandledRejection', (reason) => {
-  console.error('UNHANDLED REJECTION:', reason?.message || reason, reason?.stack);
-});
 
 const app = express();
 const server = http.createServer(app);
