@@ -775,6 +775,33 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
   }
 });
 
+// Super Admin: Change user phone number
+router.patch('/users/:id/phone', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone || !phone.trim()) return res.status(400).json({ message: 'Phone number is required' });
+
+    const exists = await User.findOne({ where: { phone: phone.trim() } });
+    if (exists && exists.id !== parseInt(req.params.id)) {
+      return res.status(400).json({ message: 'Phone number already in use by another account' });
+    }
+
+    const user = await User.findByPk(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    user.phone = phone.trim();
+    // If username was the old phone number, keep it in sync
+    if (user.username === user.phone) user.username = phone.trim();
+    await user.save();
+
+    logger.warn(`Phone changed by superadmin for user #${user.id}: ${phone.trim()}`);
+    res.json({ message: 'Phone number updated', user: { id: user.id, phone: user.phone, username: user.username } });
+  } catch (error) {
+    logger.error('Phone update error:', error);
+    res.status(500).json({ message: 'Error updating phone number', error: error.message });
+  }
+});
+
 // --- NEW ROUTE: Get Rate Limit Info ---
 // Super Admin: Get rate limit information
 router.get('/rate-limit-info', authenticate, authorize(['superadmin']), (req, res) => {

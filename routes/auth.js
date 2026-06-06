@@ -70,7 +70,9 @@ const generateReferralCode = () => {
 // HIGH FIX: signupLimiter prevents account-creation spam
 router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
   try {
-    const { username, phone, password, referred_by, email } = req.body;
+    const { phone, password, referred_by, email } = req.body;
+    // Phone is the primary identifier — username is optional display name
+    const username = (req.body.username || '').trim() || phone.trim();
 
     // Referral code is mandatory
     if (!referred_by || !referred_by.trim()) {
@@ -82,12 +84,10 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
     }
 
     const userExists = await User.findOne({
-      where: {
-        [Op.or]: [{ phone }, { username }]
-      }
+      where: { [Op.or]: [{ phone }, { username }] }
     });
     if (userExists) {
-      return res.status(400).json({ message: 'User with this phone or username already exists' });
+      return res.status(400).json({ message: 'Phone number or username already registered.' });
     }
 
     if (email) {
