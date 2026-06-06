@@ -40,6 +40,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'https://frontend-smoky-eight-43.vercel.app',
   'https://getsalonmoney.vercel.app',
+  'https://getsalonmoney-salonmoney.vercel.app',
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 

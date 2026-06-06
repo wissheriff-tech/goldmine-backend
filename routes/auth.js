@@ -63,7 +63,18 @@ const router = express.Router();
 
 // Generate referral code
 const generateReferralCode = () => {
-  return Math.random().toString(36).substring(2, 12).toUpperCase();
+  const LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // no I/O
+  const DIGITS  = "23456789";                 // no 0/1
+  const SYMBOLS = "-_";
+  const rand = (pool) => pool[Math.floor(Math.random() * pool.length)];
+  // Format: 3 letters + 3 digits + symbol + 3 letters + 2 digits  e.g. KBX729-PMX34
+  return (
+    rand(LETTERS) + rand(LETTERS) + rand(LETTERS) +
+    rand(DIGITS)  + rand(DIGITS)  + rand(DIGITS)  +
+    rand(SYMBOLS) +
+    rand(LETTERS) + rand(LETTERS) + rand(LETTERS) +
+    rand(DIGITS)  + rand(DIGITS)
+  );
 };
 
 // Sign up
