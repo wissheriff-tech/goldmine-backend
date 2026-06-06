@@ -46,8 +46,17 @@ EMAIL_USER=your-email@gmail.com
 EMAIL_PASSWORD=your-app-specific-password
 EMAIL_FROM=noreply@salonmoney.com
 
+# Orange Money Configuration
+# Get credentials from: https://developer.orange.com/apis/orange-money-webpay
+ORANGE_API_BASE=https://api.orange.com/orange-money-webpay/dev/v1
+ORANGE_AUTH_KEY=your_base64_encoded_client_id_secret
+ORANGE_MERCHANT_MSISDN=+232XXXXXXXXX
+ORANGE_CURRENCY=SLL
+ORANGE_SLL_PER_NSL=100
+
 # Frontend URL
 FRONTEND_URL=http://localhost:3000
+BACKEND_URL=http://localhost:5000
 
 # Environment
 NODE_ENV=development

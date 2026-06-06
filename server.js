@@ -181,6 +181,12 @@ const initDb = async () => {
   try {
     await sequelize.authenticate();
     logger.info('Vercel DB: authenticated');
+    // Add orange_money to payment_method ENUM if not already present
+    try {
+      await sequelize.query(`ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'orange_money'`);
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "reference_id" VARCHAR(255)`);
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "approved_at" TIMESTAMP WITH TIME ZONE`);
+    } catch (_) { /* enum value may already exist */ }
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
     const genCode = () => Math.random().toString(36).substring(2, 12).toUpperCase();
@@ -245,6 +251,7 @@ app.use('/api/export', exportRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/deposit', depositRoutes);
+app.use('/api/orange-money', require('./routes/orangeMoney'));
 
 // Root API info
 app.get('/api', (req, res) => {

@@ -74,8 +74,16 @@ const Transaction = sequelize.define('Transaction', {
     defaultValue: 'BSC'
   },
   payment_method: {
-    type: DataTypes.ENUM('binance', 'manual', 'crypto_wallet'),
+    type: DataTypes.ENUM('binance', 'manual', 'crypto_wallet', 'orange_money'),
     defaultValue: 'binance'
+  },
+  reference_id: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
+  approved_at: {
+    type: DataTypes.DATE,
+    allowNull: true
   },
   payment_proof: {
     type: DataTypes.STRING(500),
