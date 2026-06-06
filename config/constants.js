@@ -12,11 +12,11 @@ module.exports = {
     SUPPORTED_CURRENCIES: ['NSL', 'USDT']
   },
 
-  // Referral Program Settings
+  // Referral Program Settings — 3-level commission on recharge approvals
   REFERRAL: {
-    BONUS_PERCENTAGE: parseFloat(process.env.REFERRAL_BONUS_PERCENTAGE) || 10,
-    MAX_REFERRAL_LEVEL: parseInt(process.env.MAX_REFERRAL_LEVEL) || 1,
-    MIN_RECHARGE_FOR_BONUS: 0 // Minimum recharge amount to trigger referral bonus
+    LEVELS: [3, 2, 1], // L1=3%, L2=2%, L3=1% of credited NSL
+    MAX_REFERRAL_LEVEL: 3,
+    MIN_RECHARGE_FOR_BONUS: 0
   },
 
   // Fee Settings

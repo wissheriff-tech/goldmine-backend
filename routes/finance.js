@@ -6,7 +6,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
-const { FEE } = require('../config/constants');
+const { FEE, REFERRAL } = require('../config/constants');
 
 // Validation Middleware
 const {
@@ -17,6 +17,39 @@ const {
 // Security Middleware
 const { financeLimiter } = require('../middleware/security');
 const router = express.Router();
+
+// Walk up to 3 referral levels and credit commissions (fire-and-forget after recharge approval)
+async function payReferralCommissions(depositor, amountNSL) {
+  const pcts = REFERRAL.LEVELS; // [3, 2, 1]
+  let currentCode = depositor.referred_by;
+
+  for (let level = 0; level < pcts.length; level++) {
+    if (!currentCode) break;
+    const referrer = await User.findOne({ where: { referral_code: currentCode } });
+    if (!referrer) break;
+
+    const commission = parseFloat((amountNSL * pcts[level] / 100).toFixed(4));
+    if (commission <= 0) { currentCode = referrer.referred_by; continue; }
+
+    await sequelize.transaction(async (t) => {
+      referrer.balance_NSL = parseFloat(referrer.balance_NSL) + commission;
+      await referrer.save({ transaction: t });
+      await Transaction.create({
+        user_id:        referrer.id,
+        type:           'referral_bonus',
+        amount_NSL:     commission,
+        amount_usdt:    0,
+        status:         'approved',
+        payment_method: 'manual',
+        notes:          `L${level + 1} referral commission (${pcts[level]}%) from deposit of ${amountNSL} NSL by user #${depositor.id}`,
+        approved_at:    new Date(),
+      }, { transaction: t });
+    });
+
+    logger.info(`Referral L${level + 1} commission: +${commission} NSL → user #${referrer.id} (${pcts[level]}% of ${amountNSL} NSL)`);
+    currentCode = referrer.referred_by;
+  }
+}
 
 // Finance: Get pending transactions
 router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
@@ -114,6 +147,13 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
     });
 
     logger.info(`Transaction approved: ${savedTransaction.id} by ${req.user.phone}`);
+
+    // 3-level referral commission on recharge approvals
+    if (savedTransaction.type === 'recharge') {
+      payReferralCommissions(savedUser, savedTransaction.amount_NSL).catch(e =>
+        logger.error('Referral commission error:', e)
+      );
+    }
 
     if (savedUser.email) {
       emailService.sendTransactionApproved(savedUser.email, savedUser.username, savedTransaction.type, savedTransaction.amount_NSL, savedTransaction.amount_usdt, savedUser.balance_NSL).catch(e => logger.error('Email notification error:', e));
