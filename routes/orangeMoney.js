@@ -1,79 +1,73 @@
 const express = require('express');
-const crypto  = require('crypto');
+const multer  = require('multer');
+const path    = require('path');
+const fs      = require('fs');
 const { User, Transaction, sequelize } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { transactionLimiter } = require('../middleware/rateLimiter');
 const logger  = require('../utils/logger');
-const om      = require('../services/orangeMoney');
 const { FEE } = require('../config/constants');
 
 const router = express.Router();
 
-const FRONTEND_URL  = process.env.FRONTEND_URL  || 'https://getsalonmoney.vercel.app';
-const BACKEND_URL   = process.env.BACKEND_URL   || 'https://backend-tau-seven-72.vercel.app';
-
-// SLL per NSL exchange rate (configurable)
 const SLL_PER_NSL = () => parseFloat(process.env.ORANGE_SLL_PER_NSL || 100);
 
-// ── POST /api/orange-money/initiate-deposit ────────────────────────────────
-// Creates an Orange Money payment session; returns pay_token + payment_url.
-router.post('/initiate-deposit', authenticate, transactionLimiter, async (req, res) => {
-  try {
-    const { amount_NSL } = req.body;
-    const nsl = parseFloat(amount_NSL);
-
-    if (!nsl || nsl < 10) {
-      return res.status(400).json({ message: 'Minimum deposit is 10 NSL' });
-    }
-
-    const orderId  = `DEP-${req.user.id}-${Date.now()}`;
-    const amountSLL = Math.round(nsl * SLL_PER_NSL());
-
-    const result = await om.initiateDeposit({
-      orderId,
-      amountSLL,
-      returnUrl: `${FRONTEND_URL}/wallet?om_status=success&order_id=${orderId}`,
-      cancelUrl: `${FRONTEND_URL}/wallet?om_status=cancelled`,
-      notifUrl:  `${BACKEND_URL}/api/orange-money/callback`,
-    });
-
-    // Store pending transaction so we can reconcile on callback
-    await Transaction.create({
-      user_id:        req.user.id,
-      type:           'recharge',
-      amount_NSL:     nsl,
-      amount_usdt:    0,
-      status:         'pending',
-      payment_method: 'orange_money',
-      notes:          orderId,
-      deposit_network:'Orange Money',
-      reference_id:   result.pay_token || orderId,
-    });
-
-    logger.info(`Orange Money deposit initiated: ${orderId} — ${nsl} NSL (${amountSLL} SLL) for user ${req.user.id}`);
-
-    return res.json({
-      pay_token:   result.pay_token,
-      payment_url: result.payment_url,
-      order_id:    orderId,
-      amount_NSL:  nsl,
-      amount_SLL:  amountSLL,
-    });
-  } catch (err) {
-    logger.error('Orange Money initiate-deposit error:', err.response?.data || err.message);
-    return res.status(502).json({ message: 'Orange Money service unavailable. Please try again.' });
+// Multer for screenshot uploads
+const omStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = 'uploads/payments';
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `om_${req.user.id}_${Date.now()}${ext}`);
+  }
+});
+const omUpload = multer({
+  storage: omStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) return cb(new Error('Images only'));
+    cb(null, true);
   }
 });
 
-// ── GET /api/orange-money/status/:payToken ────────────────────────────────
-// Poll payment status (used by frontend while user completes payment).
-router.get('/status/:payToken', authenticate, async (req, res) => {
+// ── POST /api/orange-money/manual-deposit ─────────────────────────────────
+// User uploads screenshot of Orange Money receipt; admin approves manually.
+router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single('screenshot'), async (req, res) => {
   try {
-    const data = await om.getPaymentStatus(req.params.payToken);
-    return res.json(data);
+    const { amount_NSL, amount_SLE, reference_id, sender_number, receiver_number, timestamp_receipt } = req.body;
+    const nsl = parseFloat(amount_NSL);
+
+    if (!nsl || nsl < 10) return res.status(400).json({ message: 'Minimum deposit is 10 NSL' });
+    if (!reference_id?.trim()) return res.status(400).json({ message: 'Reference ID is required' });
+    if (!req.file) return res.status(400).json({ message: 'Screenshot is required' });
+
+    // Enforce uniqueness of reference ID across all users
+    const existing = await Transaction.findOne({ where: { reference_id: reference_id.trim() } });
+    if (existing) return res.status(400).json({ message: 'This reference ID has already been submitted.' });
+
+    const screenshotPath = req.file.path;
+
+    await Transaction.create({
+      user_id:          req.user.id,
+      type:             'recharge',
+      amount_NSL:       nsl,
+      amount_usdt:      0,
+      status:           'pending',
+      payment_method:   'orange_money',
+      deposit_network:  'Orange Money',
+      reference_id:     reference_id.trim(),
+      payment_proof:    screenshotPath,
+      notes:            JSON.stringify({ amount_SLE, sender_number, receiver_number, timestamp_receipt }),
+    });
+
+    logger.info(`Orange Money manual deposit submitted: ref=${reference_id} ${nsl} NSL for user #${req.user.id}`);
+    return res.json({ message: 'Deposit proof submitted. Admin will credit your account shortly.' });
   } catch (err) {
-    logger.error('Orange Money status check error:', err.response?.data || err.message);
-    return res.status(502).json({ message: 'Could not fetch payment status.' });
+    logger.error('Orange Money manual-deposit error:', err.message);
+    return res.status(500).json({ message: 'Submission failed. Please try again.' });
   }
 });
 
