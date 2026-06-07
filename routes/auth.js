@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
 const { User } = require('../models');
 const Session = require('../models/Session');
@@ -207,10 +208,9 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
 
     // Check if 2FA is enabled
     if (user.twoFactorEnabled && user.email) {
-      // Generate 6-digit code
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      user.twoFactorCode = code;
-      user.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      const code = crypto.randomInt(100000, 999999).toString();
+      user.twoFactorCode = await bcrypt.hash(code, 10);
+      user.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000);
       await user.save();
 
       // Send 2FA code via email
@@ -346,7 +346,8 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
       return res.status(400).json({ message: '2FA code has expired. Please login again.' });
     }
 
-    if (user.twoFactorCode !== code) {
+    const codeMatch = await bcrypt.compare(code, user.twoFactorCode);
+    if (!codeMatch) {
       return res.status(401).json({ message: 'Invalid 2FA code' });
     }
 
@@ -412,8 +413,8 @@ router.post('/resend-2fa', authLimiter, async (req, res) => {
       return res.status(400).json({ message: 'No email on file for this account' });
     }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    user.twoFactorCode = code;
+    const code = crypto.randomInt(100000, 999999).toString();
+    user.twoFactorCode = await bcrypt.hash(code, 10);
     user.twoFactorExpires = new Date(Date.now() + 10 * 60 * 1000);
     await user.save();
 

@@ -260,10 +260,8 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
 
           if (lockedTx.type === 'recharge') {
             user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(lockedTx.amount_NSL);
-          } else if (lockedTx.type === 'withdrawal') {
-            if (parseFloat(user.balance_NSL) < parseFloat(lockedTx.amount_NSL)) throw new Error('Insufficient balance');
-            user.balance_NSL = (parseFloat(user.balance_NSL) || 0) - parseFloat(lockedTx.amount_NSL);
           }
+          // withdrawal: balance already deducted at submission time — no change needed here
 
           lockedTx.status = 'approved';
           lockedTx.approved_by = req.user.id;

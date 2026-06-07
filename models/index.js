@@ -20,6 +20,7 @@ const TwoFactorAuth = require('./TwoFactorAuth');
 const ExchangeRate = require('./ExchangeRate');
 const CurrencyRate = require('./CurrencyRate');
 const DepositProof = require('./DepositProof');
+const PaymentSetting = require('./PaymentSetting');
 
 // ==================== ASSOCIATIONS ====================
 
@@ -93,5 +94,6 @@ module.exports = {
   TwoFactorAuth,
   ExchangeRate,
   CurrencyRate,
-  DepositProof
+  DepositProof,
+  PaymentSetting,
 };

@@ -43,7 +43,7 @@ const Product = sequelize.define('Product', {
   validity_days: {
     type: DataTypes.INTEGER,
     allowNull: false,
-    defaultValue: 60
+    defaultValue: 7
   },
   benefits: {
     type: DataTypes.JSON,

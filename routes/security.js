@@ -1,5 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { User, TwoFactorAuth, Session } = require('../models');
 const { Op } = require('sequelize');
 const { authenticate } = require('../middleware/auth');
@@ -90,8 +91,8 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
       // Generate and send verification code
       const code = generate6DigitCode();
       await user.update({
-        twoFactorCode: code,
-        twoFactorExpires: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+        twoFactorCode: await bcrypt.hash(code, 10),
+        twoFactorExpires: new Date(Date.now() + 10 * 60 * 1000)
       });
 
       const recipientEmail = user.email || email;
@@ -139,7 +140,7 @@ router.post('/2fa/verify', authenticate, async (req, res) => {
         return res.status(400).json({ message: 'Verification code expired' });
       }
 
-      isValid = user.twoFactorCode === code;
+      isValid = await bcrypt.compare(code, user.twoFactorCode);
     }
 
     if (!isValid) {

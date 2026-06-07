@@ -1,7 +1,6 @@
 const express = require('express');
-const { User, Product, UserProduct, Transaction } = require('../models');
+const { User, Product, UserProduct, Transaction, DepositProof, PaymentSetting, sequelize } = require('../models');
 const { Op } = require('sequelize');
-const sequelize = require('sequelize');
 const bcrypt = require('bcryptjs');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
@@ -909,7 +908,8 @@ router.get('/kyc/pending', authenticate, authorize(['superadmin', 'admin']), asy
         ]
       },
       attributes: ['id', 'username', 'phone', 'email', 'kyc_verified', 'kyc_id_front', 'kyc_id_back', 'kyc_selfie', 'kyc_additional', 'created_at'],
-      order: [['created_at', 'ASC']]
+      order: [['created_at', 'ASC']],
+      limit: 500,
     });
     res.json({ success: true, data: users, total: users.length });
   } catch (error) {
@@ -973,6 +973,151 @@ router.patch('/kyc/:userId/reject', authenticate, authorize(['superadmin', 'admi
   } catch (error) {
     logger.error('KYC reject error:', error);
     res.status(500).json({ message: 'Error rejecting KYC' });
+  }
+});
+
+// ── Payment Settings ─────────────────────────────────────────────────────────
+
+const ALLOWED_PAYMENT_KEYS = ['orange_money_number', 'africell_number', 'binance_wallet_address', 'binance_network'];
+
+router.get('/payment-settings', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const rows = await PaymentSetting.findAll();
+    const data = {};
+    rows.forEach(r => { data[r.key] = r.value; });
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('Get payment settings error:', error);
+    res.status(500).json({ message: 'Error fetching payment settings' });
+  }
+});
+
+router.put('/payment-settings', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    for (const key of ALLOWED_PAYMENT_KEYS) {
+      if (key in req.body) {
+        const value = req.body[key]?.toString().trim() || null;
+        await PaymentSetting.upsert({ key, value, updated_by: req.user.id });
+      }
+    }
+    res.json({ success: true, message: 'Payment settings updated' });
+  } catch (error) {
+    logger.error('Update payment settings error:', error);
+    res.status(500).json({ message: 'Error updating payment settings' });
+  }
+});
+
+// ── Mobile Money Deposit Management ──────────────────────────────────────────
+
+// GET /api/admin/mobile-deposits/pending — list pending Orange Money + Africell deposits
+router.get('/mobile-deposits/pending', authenticate, authorize(['superadmin', 'admin', 'finance']), async (req, res) => {
+  try {
+    const { literal } = require('sequelize');
+    const txs = await Transaction.findAll({
+      where: {
+        payment_method: { [Op.in]: ['orange_money', 'africell'] },
+        status: 'pending',
+        type: 'recharge',
+      },
+      include: [{ model: User, as: 'user', attributes: ['id', 'username', 'phone', 'balance_NSL'] }],
+      order: [[literal('"created_at"'), 'ASC']],
+    });
+    res.json({ success: true, data: txs });
+  } catch (error) {
+    logger.error('Mobile deposits pending error:', error);
+    res.status(500).json({ message: 'Error fetching mobile deposits' });
+  }
+});
+
+// PATCH /api/admin/transaction/:id/approve — approve a pending Transaction (deposit or withdrawal)
+router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 'admin', 'finance']), adminLimiter, async (req, res) => {
+  const { approved_NSL, notes } = req.body;
+
+  try {
+    let result;
+    await sequelize.transaction(async (t) => {
+      const tx = await Transaction.findOne({ where: { id: req.params.id }, lock: t.LOCK.UPDATE, transaction: t });
+      if (!tx) { const e = new Error('Transaction not found'); e.status = 404; throw e; }
+      if (tx.status !== 'pending') { const e = new Error('Already processed'); e.status = 400; throw e; }
+
+      tx.status = 'approved';
+      tx.admin_notes = notes || null;
+      tx.approved_at = new Date();
+      await tx.save({ transaction: t });
+
+      if (tx.type === 'withdrawal') {
+        // Balance was already deducted at submission time — just mark approved, no balance change.
+        result = { txType: 'withdrawal', txId: tx.id };
+        logger.info(`Withdrawal ${tx.id} approved by admin ${req.user.username}`);
+      } else {
+        // Deposit: credit balance now (with fee)
+        const feePercent = parseFloat(process.env.RECHARGE_FEE_PERCENTAGE || 10);
+        const baseNSL = parseFloat(approved_NSL || tx.amount_NSL);
+        const creditNSL = baseNSL * (1 - feePercent / 100);
+
+        const user = await User.findOne({ where: { id: tx.user_id }, lock: t.LOCK.UPDATE, transaction: t });
+        if (!user) { const e = new Error('User not found'); e.status = 404; throw e; }
+
+        user.balance_NSL = parseFloat(user.balance_NSL) + creditNSL;
+        await user.save({ transaction: t });
+
+        result = { txType: 'deposit', creditNSL, user, baseNSL, feePercent };
+        logger.info(`Deposit ${tx.id} approved by admin ${req.user.username}: ${baseNSL} NSL → ${creditNSL} credited to user ${user.username}`);
+      }
+    });
+
+    if (result.txType === 'withdrawal') {
+      res.json({ success: true, message: 'Withdrawal approved. Please process the payout manually.' });
+    } else {
+      res.json({
+        success: true,
+        message: `Approved. ${result.creditNSL.toFixed(0)} NSL credited (${result.feePercent}% fee applied).`,
+        data: { credited_NSL: result.creditNSL, new_balance: result.user.balance_NSL },
+      });
+    }
+  } catch (error) {
+    logger.error('Transaction approve error:', error);
+    res.status(error.status || 500).json({ message: error.message || 'Approval failed' });
+  }
+});
+
+// PATCH /api/admin/transaction/:id/reject — reject a pending Transaction (deposit or withdrawal)
+router.patch('/transaction/:id/reject', authenticate, authorize(['superadmin', 'admin', 'finance']), adminLimiter, async (req, res) => {
+  const { reason } = req.body;
+  if (!reason?.trim()) return res.status(400).json({ message: 'Rejection reason required' });
+
+  try {
+    let txType;
+    await sequelize.transaction(async (t) => {
+      const tx = await Transaction.findOne({ where: { id: req.params.id }, lock: t.LOCK.UPDATE, transaction: t });
+      if (!tx) { const e = new Error('Transaction not found'); e.status = 404; throw e; }
+      if (tx.status !== 'pending') { const e = new Error('Already processed'); e.status = 400; throw e; }
+
+      txType = tx.type;
+      tx.status = 'rejected';
+      tx.admin_notes = reason;
+      await tx.save({ transaction: t });
+
+      // Refund balance when a withdrawal is rejected — balance was pre-deducted at submission time
+      if (tx.type === 'withdrawal') {
+        const user = await User.findOne({ where: { id: tx.user_id }, lock: t.LOCK.UPDATE, transaction: t });
+        if (user) {
+          // Recover gross amount from notes; fall back to amount_NSL (net)
+          const grossMatch = (tx.notes || '').match(/Withdrawal:\s*([\d.]+)\s*NSL/);
+          const refundNSL = grossMatch ? parseFloat(grossMatch[1]) : parseFloat(tx.amount_NSL);
+          user.balance_NSL = parseFloat(user.balance_NSL) + refundNSL;
+          await user.save({ transaction: t });
+          logger.info(`Withdrawal ${tx.id} rejected; refunded ${refundNSL} NSL to user ${tx.user_id}`);
+        }
+      }
+
+      logger.info(`Transaction ${tx.id} (${tx.type}) rejected by admin ${req.user.username}: ${reason}`);
+    });
+
+    res.json({ success: true, message: txType === 'withdrawal' ? 'Withdrawal rejected and balance refunded.' : 'Deposit rejected.' });
+  } catch (error) {
+    logger.error('Transaction reject error:', error);
+    res.status(error.status || 500).json({ message: error.message || 'Rejection failed' });
   }
 });
 

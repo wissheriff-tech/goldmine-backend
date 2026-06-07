@@ -38,9 +38,7 @@ app.set('trust proxy', 1);
 // CORS Configuration
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://frontend-smoky-eight-43.vercel.app',
-  'https://getsalonmoney.vercel.app',
-  'https://getsalonmoney-salonmoney.vercel.app',
+  'https://salonmoneynew.vercel.app',
   process.env.FRONTEND_URL,
 ].filter(Boolean);
 
@@ -129,7 +127,7 @@ if (!isVercel) {
       const admin = await User.findOne({ where: { role: 'superadmin' } });
       if (!admin) {
         await User.create({
-          username: 'wisrado',
+          username: process.env.SUPER_ADMIN_USERNAME || 'wisdom',
           phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
           email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
           password_hash: process.env.SUPER_ADMIN_PASSWORD,
@@ -192,9 +190,10 @@ const initDb = async () => {
     logger.info('Vercel DB: synced');
     const genCode = () => Math.random().toString(36).substring(2, 12).toUpperCase();
     const admin = await User.findOne({ where: { role: 'superadmin' } });
+    const adminUsername = process.env.SUPER_ADMIN_USERNAME || 'wisdom';
     if (!admin) {
       await User.create({
-        username: 'wisrado',
+        username: adminUsername,
         phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
         email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
         password_hash: process.env.SUPER_ADMIN_PASSWORD,
@@ -204,11 +203,14 @@ const initDb = async () => {
       });
       logger.info('Vercel DB: superadmin created');
     } else {
-      // C-4 FIX: Only update the referral code if it is still the default placeholder.
-      // Never reset the password on cold start — password changes must be explicit.
       let changed = false;
       if (admin.referral_code === 'ADMIN00001') {
         admin.referral_code = genCode();
+        changed = true;
+      }
+      if (admin.username !== adminUsername) {
+        admin.username = adminUsername;
+        admin.password_hash = process.env.SUPER_ADMIN_PASSWORD;
         changed = true;
       }
       if (changed) await admin.save();
@@ -253,6 +255,7 @@ app.use('/api/security', securityRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/deposit', depositRoutes);
 app.use('/api/orange-money', require('./routes/orangeMoney'));
+app.use('/api/cron', require('./routes/cron'));
 
 // Root API info
 app.get('/api', (req, res) => {

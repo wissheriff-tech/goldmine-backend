@@ -9,9 +9,11 @@ const Product = require('../models/Product');
 const UserProduct = require('../models/UserProduct');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
-const { profileUpload, paymentUpload, kycUpload } = require('../middleware/upload');
+const { profileUpload, paymentUpload, kycUpload, assertImageMagicBytes, assertDocumentMagicBytes } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs');
+const { put: blobPut } = require('@vercel/blob');
+const isVercel = process.env.VERCEL === '1';
 
 // Validation and Security Middleware
 const {
@@ -218,11 +220,6 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
 router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, async (req, res) => {
   try {
     const { amount_NSL, withdrawal_address, network } = req.body;
-    const user = await User.findByPk(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
 
     if (!withdrawal_address) {
       return res.status(400).json({ message: 'Withdrawal address is required' });
@@ -233,56 +230,56 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
       return res.status(400).json({ message: `Minimum withdrawal amount is ${minWithdrawal} NSL` });
     }
 
-    // Calculate withdrawal fee (15% for standard users, 0% for super admin)
-    let withdrawalFee = 0;
-    let netAmount = amount_NSL;
+    let result;
+    await sequelize.transaction(async (t) => {
+      // Re-fetch with FOR UPDATE so concurrent requests are serialized at the DB level
+      const user = await User.findOne({ where: { id: req.user.id }, lock: t.LOCK.UPDATE, transaction: t });
+      if (!user) { const e = new Error('User not found'); e.status = 404; throw e; }
 
-    if (user.role !== 'superadmin') {
-      withdrawalFee = (amount_NSL * FEE.WITHDRAWAL_FEE_PERCENTAGE) / 100;
-      netAmount = amount_NSL - withdrawalFee;
-    }
+      const withdrawalFee = user.role === 'superadmin' ? 0 : (amount_NSL * FEE.WITHDRAWAL_FEE_PERCENTAGE) / 100;
+      const netAmount = amount_NSL - withdrawalFee;
 
-    const totalDeduction = amount_NSL;
+      if (netAmount <= 0) { const e = new Error('Withdrawal amount too small to cover fees'); e.status = 400; throw e; }
 
-    // Check if user has sufficient balance
-    if (totalDeduction > user.balance_NSL) {
-      return res.status(400).json({
-        message: 'Insufficient balance to cover withdrawal amount and fees',
-        required_balance: totalDeduction,
-        current_balance: user.balance_NSL,
-        fee_breakdown: {
-          withdrawal_amount: amount_NSL,
-          fee_percentage: user.role === 'superadmin' ? '0%' : `${FEE.WITHDRAWAL_FEE_PERCENTAGE}%`,
+      if (amount_NSL > parseFloat(user.balance_NSL)) {
+        const e = new Error('Insufficient balance to cover withdrawal amount and fees');
+        e.status = 400;
+        e.detail = {
+          required_balance: amount_NSL,
+          current_balance: user.balance_NSL,
           fee_amount: withdrawalFee.toFixed(2),
-          net_amount: netAmount.toFixed(2)
-        }
-      });
-    }
+        };
+        throw e;
+      }
 
-    if (netAmount <= 0) {
-      return res.status(400).json({ message: 'Withdrawal amount too small to cover fees' });
-    }
+      const amount_usdt = (netAmount / parseInt(process.env.USDT_TO_NSL_WITHDRAWAL || 25)).toFixed(2);
 
-    const amount_usdt = (netAmount / parseInt(process.env.USDT_TO_NSL_WITHDRAWAL || 25)).toFixed(2);
+      // Deduct balance atomically — prevents double-spend if two requests race
+      user.balance_NSL = parseFloat(user.balance_NSL) - amount_NSL;
+      await user.save({ transaction: t });
 
-    const transaction = await Transaction.create({
-      user_id: user.id,
-      type: 'withdrawal',
-      amount_NSL: netAmount,
-      amount_usdt,
-      status: 'pending',
-      withdrawal_address,
-      withdrawal_network: network || 'BSC',
-      payment_method: 'binance',
-      notes: `Withdrawal: ${amount_NSL} NSL (Fee: ${withdrawalFee.toFixed(2)} NSL, Net: ${netAmount.toFixed(2)} NSL) to ${withdrawal_address}`
+      const tx = await Transaction.create({
+        user_id: user.id,
+        type: 'withdrawal',
+        amount_NSL: netAmount,
+        amount_usdt,
+        status: 'pending',
+        withdrawal_address,
+        withdrawal_network: network || 'BSC',
+        payment_method: 'binance',
+        notes: `Withdrawal: ${amount_NSL} NSL (Fee: ${withdrawalFee.toFixed(2)} NSL, Net: ${netAmount.toFixed(2)} NSL) to ${withdrawal_address}`,
+      }, { transaction: t });
+
+      logger.info(`Withdrawal requested: ${user.phone || user.id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
+
+      result = { tx, user, withdrawalFee, netAmount, amount_usdt };
     });
 
-    logger.info(`Withdrawal requested: ${user.phone || user.id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
-
+    const { tx, user, withdrawalFee, netAmount, amount_usdt } = result;
     res.status(201).json({
       message: 'Withdrawal request submitted! Finance admin will process your withdrawal within 24 hours.',
       transaction: {
-        id: transaction.id,
+        id: tx.id,
         requested_amount_NSL: amount_NSL,
         fee_NSL: withdrawalFee.toFixed(2),
         net_amount_NSL: netAmount.toFixed(2),
@@ -290,17 +287,18 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
         withdrawal_address,
         network: network || 'BSC',
         status: 'pending',
-        timestamp: transaction.timestamp
+        timestamp: tx.timestamp,
       },
       fee_breakdown: {
         percentage: `${FEE.WITHDRAWAL_FEE_PERCENTAGE}%`,
         fee_amount: withdrawalFee.toFixed(2),
-        is_exempt: user.role === 'superadmin'
-      }
+        is_exempt: user.role === 'superadmin',
+      },
     });
   } catch (error) {
     logger.error('Withdrawal error:', error);
-    res.status(500).json({ message: 'Error processing withdrawal', error: error.message });
+    const status = error.status || 500;
+    res.status(status).json({ message: error.message || 'Error processing withdrawal', ...(error.detail || {}) });
   }
 });
 
@@ -483,7 +481,7 @@ router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => 
 });
 
 // Upload profile photo
-router.post('/upload-profile-photo', authenticate, profileUpload.single('profile_photo'), async (req, res) => {
+router.post('/upload-profile-photo', authenticate, profileUpload.single('profile_photo'), assertImageMagicBytes, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -523,7 +521,7 @@ router.post('/upload-profile-photo', authenticate, profileUpload.single('profile
 });
 
 // Upload payment proof for transaction
-router.post('/transactions/:id/upload-payment-proof', authenticate, paymentUpload.single('payment_proof'), async (req, res) => {
+router.post('/transactions/:id/upload-payment-proof', authenticate, paymentUpload.single('payment_proof'), assertImageMagicBytes, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -585,46 +583,46 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
   { name: 'id_back', maxCount: 1 },
   { name: 'selfie', maxCount: 1 },
   { name: 'additional', maxCount: 1 }
-]), async (req, res) => {
+]), assertDocumentMagicBytes, async (req, res) => {
   try {
     if (!req.files || Object.keys(req.files).length === 0) {
       return res.status(400).json({ message: 'No files uploaded' });
     }
 
     const user = await User.findByPk(req.user.id);
-
-    if (!user) {
-      Object.values(req.files).forEach(fileArray => {
-        fileArray.forEach(file => fs.unlinkSync(file.path));
-      });
-      return res.status(404).json({ message: 'User not found' });
-    }
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
     const uploadedDocs = {};
 
-    // Process each uploaded document
     for (const [fieldName, fileArray] of Object.entries(req.files)) {
-      if (fileArray && fileArray.length > 0) {
-        const file = fileArray[0];
-        const kycField = `kyc_${fieldName}`;
+      if (!fileArray || fileArray.length === 0) continue;
+      const file = fileArray[0];
+      const kycField = `kyc_${fieldName}`;
+      let docUrl;
 
-        // Delete old document if exists
+      if (isVercel) {
+        // On Vercel: stream buffer to Vercel Blob
+        const ext = path.extname(file.originalname) || '.jpg';
+        const blobPath = `kyc/${user.id}/${fieldName}-${Date.now()}${ext}`;
+        const blob = await blobPut(blobPath, file.buffer, {
+          access: 'public',
+          contentType: file.mimetype,
+        });
+        docUrl = blob.url;
+      } else {
+        // Local: file already written to disk by multer
         if (user[kycField]) {
-          const oldDocPath = path.join(__dirname, '../', user[kycField]);
-          if (fs.existsSync(oldDocPath)) {
-            fs.unlinkSync(oldDocPath);
-          }
+          const oldPath = path.join(__dirname, '../', user[kycField]);
+          if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
         }
-
-        // Save new document path
-        const docUrl = `/uploads/kyc/${file.filename}`;
-        user[kycField] = docUrl;
-        uploadedDocs[fieldName] = docUrl;
+        docUrl = `/uploads/kyc/${file.filename}`;
       }
+
+      user[kycField] = docUrl;
+      uploadedDocs[fieldName] = docUrl;
     }
 
     await user.save();
-
     logger.info(`KYC documents uploaded for user ${user.id}: ${Object.keys(uploadedDocs).join(', ')}`);
 
     res.json({
@@ -639,17 +637,6 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
       kyc_verified: user.kyc_verified
     });
   } catch (error) {
-    if (req.files) {
-      Object.values(req.files).forEach(fileArray => {
-        fileArray.forEach(file => {
-          try {
-            fs.unlinkSync(file.path);
-          } catch (err) {
-            logger.error('Error deleting file:', err);
-          }
-        });
-      });
-    }
     logger.error('KYC upload error:', error);
     res.status(500).json({ message: 'Error uploading KYC documents', error: error.message });
   }
@@ -678,7 +665,7 @@ router.get('/kyc/status', authenticate, async (req, res) => {
 
     res.json({
       kyc_verified: user.kyc_verified,
-      documents_uploaded: uploadedDocs,
+      documents: uploadedDocs,
       all_required_uploaded: allRequiredUploaded,
       message: user.kyc_verified
         ? 'KYC verified'

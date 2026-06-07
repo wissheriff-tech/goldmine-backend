@@ -250,10 +250,17 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
 
     // Withdrawal stats
     const pendingWithdrawals = await Transaction.findAll({
-      where: {
-        type: 'withdrawal',
-        status: 'pending'
-      },
+      where: { type: 'withdrawal', status: 'pending' },
+      attributes: [
+        [fn('COUNT', col('id')), 'count'],
+        [fn('SUM', col('amount_NSL')), 'total_NSL'],
+        [fn('SUM', col('amount_usdt')), 'total_USDT']
+      ],
+      raw: true
+    });
+
+    const approvedWithdrawals = await Transaction.findAll({
+      where: { type: 'withdrawal', status: 'approved' },
       attributes: [
         [fn('COUNT', col('id')), 'count'],
         [fn('SUM', col('amount_NSL')), 'total_NSL'],
@@ -375,6 +382,11 @@ router.get('/admin/dashboard', authenticate, authorize(['superadmin', 'admin']),
           count: parseInt(pendingWithdrawals[0]?.count) || 0,
           total_NSL: parseFloat(pendingWithdrawals[0]?.total_NSL) || 0,
           total_USDT: parseFloat(pendingWithdrawals[0]?.total_USDT) || 0
+        },
+        approved: {
+          count: parseInt(approvedWithdrawals[0]?.count) || 0,
+          total_NSL: parseFloat(approvedWithdrawals[0]?.total_NSL) || 0,
+          total_USDT: parseFloat(approvedWithdrawals[0]?.total_USDT) || 0
         }
       },
       products: {

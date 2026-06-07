@@ -59,8 +59,14 @@ const signupSchema = Joi.object({
     }),
 
   referred_by: Joi.string()
-    .optional()
-    .allow('')
+    .trim()
+    .min(6)
+    .required()
+    .messages({
+      'any.required': 'An invite code is required to sign up',
+      'string.empty': 'An invite code is required to sign up',
+      'string.min': 'Invalid invite code'
+    })
 });
 
 const loginSchema = Joi.object({
@@ -172,59 +178,74 @@ const buyProductSchema = Joi.object({
 
 const createProductSchema = Joi.object({
   name: Joi.string()
-    .valid('VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9')
-    .required(),
+    .valid('VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9')
+    .required()
+    .messages({ 'any.only': 'Name must be VIP0 through VIP9' }),
 
   description: Joi.string()
-    .required(),
+    .max(500)
+    .optional()
+    .allow(''),
 
   price_NSL: Joi.number()
     .positive()
-    .required(),
+    .required()
+    .messages({ 'number.positive': 'Price must be positive' }),
+
+  price_usdt: Joi.number()
+    .positive()
+    .optional(),
 
   daily_income_NSL: Joi.number()
     .positive()
-    .required(),
+    .required()
+    .messages({ 'number.positive': 'Daily income must be positive' }),
 
   validity_days: Joi.number()
     .integer()
-    .positive()
-    .default(60),
+    .min(1)
+    .default(7)
+    .messages({ 'number.min': 'Validity must be at least 1 day' }),
 
   benefits: Joi.array()
-    .items(Joi.string())
+    .items(Joi.string().max(200))
     .optional(),
 
-  is_active: Joi.boolean()
+  active: Joi.boolean()
     .default(true)
 });
 
 const updateProductSchema = Joi.object({
-  name: Joi.string()
-    .valid('VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9')
-    .optional(),
-
   description: Joi.string()
-    .optional(),
+    .max(500)
+    .optional()
+    .allow(''),
 
   price_NSL: Joi.number()
+    .positive()
+    .optional()
+    .messages({ 'number.positive': 'Price must be positive' }),
+
+  price_usdt: Joi.number()
     .positive()
     .optional(),
 
   daily_income_NSL: Joi.number()
     .positive()
-    .optional(),
+    .optional()
+    .messages({ 'number.positive': 'Daily income must be positive' }),
 
   validity_days: Joi.number()
     .integer()
-    .positive()
-    .optional(),
+    .min(1)
+    .optional()
+    .messages({ 'number.min': 'Validity must be at least 1 day' }),
 
   benefits: Joi.array()
-    .items(Joi.string())
+    .items(Joi.string().max(200))
     .optional(),
 
-  is_active: Joi.boolean()
+  active: Joi.boolean()
     .optional()
 });
 

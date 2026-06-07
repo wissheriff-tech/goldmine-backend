@@ -2,6 +2,81 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+// ── Magic-byte validation ────────────────────────────────────────────────────
+// MIME type / extension checks (done by fileFilter) can be spoofed in the HTTP
+// headers.  We also read the first 12 bytes of the actual file content and
+// compare against known signatures so that a renamed executable can never slip
+// through as an image.
+
+function detectMagic(buf) {
+  if (!buf || buf.length < 3) return null;
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return 'jpeg';
+  if (buf.length >= 8 &&
+      buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47 &&
+      buf[4] === 0x0D && buf[5] === 0x0A && buf[6] === 0x1A && buf[7] === 0x0A) return 'png';
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) return 'gif';
+  if (buf.length >= 12 &&
+      buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+      buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'webp';
+  if (buf[0] === 0x25 && buf[1] === 0x50 && buf[2] === 0x44 && buf[3] === 0x46) return 'pdf';
+  return null;
+}
+
+async function readHeader(file) {
+  if (file.buffer) return file.buffer.slice(0, 12);
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const s = fs.createReadStream(file.path, { start: 0, end: 11 });
+    s.on('data', c => chunks.push(c));
+    s.on('end', () => resolve(Buffer.concat(chunks)));
+    s.on('error', reject);
+  });
+}
+
+function purge(file) {
+  if (file.path) fs.unlink(file.path, () => {});
+}
+
+const IMAGE_TYPES    = new Set(['jpeg', 'png', 'gif', 'webp']);
+const DOCUMENT_TYPES = new Set(['jpeg', 'png', 'gif', 'webp', 'pdf']);
+
+// Middleware for single-file image uploads (req.file)
+const assertImageMagicBytes = async (req, res, next) => {
+  if (!req.file) return next();
+  try {
+    const buf  = await readHeader(req.file);
+    const type = detectMagic(buf);
+    if (!IMAGE_TYPES.has(type)) {
+      purge(req.file);
+      return res.status(400).json({ message: 'Invalid file content. Only real image files are accepted.' });
+    }
+    next();
+  } catch {
+    return res.status(400).json({ message: 'Could not verify file content.' });
+  }
+};
+
+// Middleware for document uploads — single file (req.file) or multi-field (req.files)
+const assertDocumentMagicBytes = async (req, res, next) => {
+  const files = req.file
+    ? [req.file]
+    : Object.values(req.files || {}).flat();
+  if (files.length === 0) return next();
+  try {
+    for (const file of files) {
+      const buf  = await readHeader(file);
+      const type = detectMagic(buf);
+      if (!DOCUMENT_TYPES.has(type)) {
+        files.forEach(purge);
+        return res.status(400).json({ message: 'Invalid file content. Only real image or PDF files are accepted.' });
+      }
+    }
+    next();
+  } catch {
+    return res.status(400).json({ message: 'Could not verify file content.' });
+  }
+};
+
 // Check if running on Vercel (read-only file system)
 const isVercel = process.env.VERCEL === '1';
 
@@ -120,7 +195,8 @@ module.exports = {
   profileUpload,
   paymentUpload,
   kycUpload,
-  // Keep old default export for backward compatibility
+  assertImageMagicBytes,
+  assertDocumentMagicBytes,
   upload: profileUpload,
-  default: profileUpload
+  default: profileUpload,
 };

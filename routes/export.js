@@ -6,6 +6,9 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
+const ADMIN_EXPORT_LIMIT = parseInt(process.env.MAX_EXPORT_ROWS || 10000);
+const USER_EXPORT_LIMIT  = 1000;
+
 // Helper function to convert to CSV
 function convertToCSV(data, headers) {
   if (!data || data.length === 0) return headers.join(',');
@@ -53,9 +56,15 @@ router.get('/transactions/csv', authenticate, authorize(['superadmin', 'admin', 
         { model: Product, as: 'product', attributes: ['name'] }
       ],
       order: [['timestamp', 'DESC']],
+      limit: ADMIN_EXPORT_LIMIT,
       raw: true,
       nest: true
     });
+
+    if (transactions.length === ADMIN_EXPORT_LIMIT) {
+      res.setHeader('X-Export-Truncated', 'true');
+      res.setHeader('X-Export-Limit', String(ADMIN_EXPORT_LIMIT));
+    }
 
     // Format data for CSV
     const formattedData = transactions.map(t => ({
@@ -121,8 +130,14 @@ router.get('/users/csv', authenticate, authorize(['superadmin', 'admin']), async
       where,
       attributes: { exclude: ['password_hash'] },
       order: [['created_at', 'DESC']],
+      limit: ADMIN_EXPORT_LIMIT,
       raw: true
     });
+
+    if (users.length === ADMIN_EXPORT_LIMIT) {
+      res.setHeader('X-Export-Truncated', 'true');
+      res.setHeader('X-Export-Limit', String(ADMIN_EXPORT_LIMIT));
+    }
 
     const formattedData = users.map(u => ({
       User_ID: u.id.toString(),
@@ -191,9 +206,15 @@ router.get('/referrals/csv', authenticate, authorize(['superadmin', 'admin']), a
         { model: User, as: 'referred', attributes: ['phone', 'username'] }
       ],
       order: [['timestamp', 'DESC']],
+      limit: ADMIN_EXPORT_LIMIT,
       raw: true,
       nest: true
     });
+
+    if (referrals.length === ADMIN_EXPORT_LIMIT) {
+      res.setHeader('X-Export-Truncated', 'true');
+      res.setHeader('X-Export-Limit', String(ADMIN_EXPORT_LIMIT));
+    }
 
     const formattedData = referrals.map(r => ({
       Referral_ID: r.id.toString(),
@@ -243,9 +264,15 @@ router.get('/my-transactions/csv', authenticate, async (req, res) => {
         { model: Product, as: 'product', attributes: ['name'] }
       ],
       order: [['timestamp', 'DESC']],
+      limit: USER_EXPORT_LIMIT,
       raw: true,
       nest: true
     });
+
+    if (transactions.length === USER_EXPORT_LIMIT) {
+      res.setHeader('X-Export-Truncated', 'true');
+      res.setHeader('X-Export-Limit', String(USER_EXPORT_LIMIT));
+    }
 
     const formattedData = transactions.map(t => ({
       Transaction_ID: t.id.toString(),

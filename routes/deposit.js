@@ -6,9 +6,12 @@ const crypto = require('crypto');
 const https = require('https');
 const { authenticate, authorizeRoles } = require('../middleware/auth');
 const { depositLimiter } = require('../middleware/security');
-const { DepositProof, User, Transaction, sequelize } = require('../models');
+const { assertImageMagicBytes } = require('../middleware/upload');
+const { DepositProof, User, Transaction, PaymentSetting, sequelize } = require('../models');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
+const { put: blobPut } = require('@vercel/blob');
+const isVercel = process.env.VERCEL === '1';
 
 const router = express.Router();
 
@@ -52,21 +55,23 @@ async function getBinanceUSDTAddress() {
   });
 }
 
-// Multer storage for deposit proof images
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = 'uploads/deposits';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `deposit_${req.user.id}_${Date.now()}${ext}`);
-  }
-});
+// Multer storage: memory on Vercel (no persistent disk), disk locally
+const depositStorage = isVercel
+  ? multer.memoryStorage()
+  : multer.diskStorage({
+      destination: (req, file, cb) => {
+        const dir = 'uploads/deposits';
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname);
+        cb(null, `deposit_${req.user.id}_${Date.now()}${ext}`);
+      }
+    });
 
 const upload = multer({
-  storage,
+  storage: depositStorage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
@@ -78,15 +83,27 @@ const upload = multer({
   }
 });
 
+async function getPaymentSettings() {
+  try {
+    const rows = await PaymentSetting.findAll();
+    const s = {};
+    rows.forEach(r => { s[r.key] = r.value; });
+    return s;
+  } catch { return {}; }
+}
+
 // GET /api/deposit/wallet-info — returns Binance USDT TRC20 deposit address
 router.get('/wallet-info', authenticate, async (req, res) => {
   try {
-    const address = await getBinanceUSDTAddress() || process.env.DEPOSIT_WALLET_ADDRESS || '';
+    const settings = await getPaymentSettings();
+    let address = await getBinanceUSDTAddress();
+    if (!address) address = settings.binance_wallet_address || process.env.DEPOSIT_WALLET_ADDRESS || '';
+    const network = settings.binance_network || 'TRC20 (USDT)';
     res.json({
       success: true,
       data: {
         wallet_address: address,
-        network: 'TRC20 (USDT)',
+        network,
         qr_code: process.env.DEPOSIT_QR_URL || null,
         instructions: 'Send USDT to the address above, then upload your transaction proof below.'
       }
@@ -97,9 +114,28 @@ router.get('/wallet-info', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/deposit/payment-methods — returns all configured payment numbers/addresses
+router.get('/payment-methods', authenticate, async (req, res) => {
+  try {
+    const settings = await getPaymentSettings();
+    res.json({
+      success: true,
+      data: {
+        orange_money_number: settings.orange_money_number || null,
+        africell_number: settings.africell_number || null,
+        binance_wallet_address: settings.binance_wallet_address || process.env.DEPOSIT_WALLET_ADDRESS || null,
+        binance_network: settings.binance_network || 'TRC20 (USDT)',
+      }
+    });
+  } catch (error) {
+    logger.error('Payment methods error:', error);
+    res.status(500).json({ message: 'Error fetching payment methods' });
+  }
+});
+
 // POST /api/deposit/submit — user submits deposit proof
 // HIGH FIX: depositLimiter prevents submission spam
-router.post('/submit', authenticate, depositLimiter, upload.single('receipt'), async (req, res) => {
+router.post('/submit', authenticate, depositLimiter, upload.single('receipt'), assertImageMagicBytes, async (req, res) => {
   try {
     const { amount, txid, notes } = req.body;
 
@@ -111,9 +147,21 @@ router.post('/submit', authenticate, depositLimiter, upload.single('receipt'), a
       return res.status(400).json({ message: 'Valid amount is required' });
     }
 
+    let receiptImage;
+    if (isVercel) {
+      const ext = path.extname(req.file.originalname) || '.jpg';
+      const blob = await blobPut(`deposits/${req.user.id}/${Date.now()}${ext}`, req.file.buffer, {
+        access: 'public',
+        contentType: req.file.mimetype,
+      });
+      receiptImage = blob.url;
+    } else {
+      receiptImage = req.file.path;
+    }
+
     const proof = await DepositProof.create({
       user_id: req.user.id,
-      receipt_image: req.file.path,
+      receipt_image: receiptImage,
       original_filename: req.file.originalname,
       user_submitted_amount: parseFloat(amount),
       user_submitted_currency: 'USDT',

@@ -130,8 +130,7 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
           transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${FEE.RECHARGE_FEE_PERCENTAGE}%)`;
         }
       } else if (transaction.type === 'withdrawal') {
-        if (user.balance_NSL < transaction.amount_NSL) throw Object.assign(new Error('Insufficient balance for withdrawal'), { status: 400 });
-        user.balance_NSL -= transaction.amount_NSL;
+        // Balance was already deducted at submission time — just mark approved so admin knows to send funds.
       }
 
       transaction.status = 'approved';
@@ -276,22 +275,26 @@ router.get('/users', authenticate, authorize(['superadmin', 'finance']), async (
   }
 });
 
+const MAX_MANUAL_CREDIT_NSL  = parseFloat(process.env.MAX_MANUAL_CREDIT_NSL  || 500000);
+const MAX_MANUAL_CREDIT_USDT = parseFloat(process.env.MAX_MANUAL_CREDIT_USDT || 5000);
+
 // Finance: Add currency to user
 router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateAddCurrency, async (req, res) => {
   try {
     const { amount_NSL, amount_usdt, reason } = req.body;
+
+    const nsl  = amount_NSL  ? parseFloat(amount_NSL)  : 0;
+    const usdt = amount_usdt ? parseFloat(amount_usdt) : 0;
+
+    if (nsl  > MAX_MANUAL_CREDIT_NSL)  return res.status(400).json({ message: `Single credit cannot exceed ${MAX_MANUAL_CREDIT_NSL.toLocaleString()} NSL` });
+    if (usdt > MAX_MANUAL_CREDIT_USDT) return res.status(400).json({ message: `Single credit cannot exceed ${MAX_MANUAL_CREDIT_USDT.toLocaleString()} USDT` });
+    if (nsl <= 0 && usdt <= 0)         return res.status(400).json({ message: 'Specify a positive NSL or USDT amount' });
+
     const user = await User.findByPk(req.params.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    if (amount_NSL) {
-      user.balance_NSL += parseFloat(amount_NSL);
-    }
-    if (amount_usdt) {
-      user.balance_usdt += parseFloat(amount_usdt);
-    }
+    if (nsl  > 0) user.balance_NSL  = parseFloat(user.balance_NSL)  + nsl;
+    if (usdt > 0) user.balance_usdt = parseFloat(user.balance_usdt) + usdt;
 
     await user.save();
 
@@ -299,15 +302,15 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
     const transaction = await Transaction.create({
       user_id: user.id,
       type: 'recharge',
-      amount_NSL: amount_NSL || 0,
-      amount_usdt: amount_usdt || 0,
+      amount_NSL: nsl,
+      amount_usdt: usdt,
       status: 'approved',
       approved_by: req.user.id,
       notes: `Currency added by finance: ${reason || 'Manual addition'}`,
       completed_at: new Date()
     });
 
-    logger.info(`Currency added by finance (${req.user.phone}) to user ${user.phone}: NSL=${amount_NSL}, USDT=${amount_usdt}`);
+    logger.info(`Currency added by finance (${req.user.phone}) to user ${user.phone}: NSL=${nsl}, USDT=${usdt}`);
 
     res.json({
       message: 'Currency added successfully',
@@ -331,18 +334,15 @@ router.patch('/users/:id/suspend', authenticate, authorize(['superadmin', 'finan
   try {
     const { reason } = req.body;
 
-    await User.update(
-      { status: 'frozen' },
-      { where: { id: req.params.id } }
-    );
+    const user = await User.findByPk(req.params.id, { attributes: { exclude: ['password_hash'] } });
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const user = await User.findByPk(req.params.id, {
-      attributes: { exclude: ['password_hash'] }
-    });
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+    // Finance cannot freeze admin or superadmin accounts
+    if (['admin', 'superadmin'].includes(user.role) && req.user.role !== 'superadmin') {
+      return res.status(403).json({ message: 'Finance cannot suspend admin accounts. Contact a superadmin.' });
     }
+
+    await user.update({ status: 'frozen' });
 
     logger.warn(`User suspended by finance (${req.user.phone}): ${user.phone} - Reason: ${reason || 'No reason'}`);
 
@@ -383,8 +383,9 @@ router.patch('/users/:id/activate', authenticate, authorize(['superadmin', 'fina
 // Finance: Approve user account (for pending users)
 router.patch('/users/:id/approve', authenticate, authorize(['superadmin', 'finance']), financeLimiter, async (req, res) => {
   try {
+    // Only activate the account — KYC verification is a separate step reviewed by admin
     await User.update(
-      { status: 'active', kyc_verified: true },
+      { status: 'active' },
       { where: { id: req.params.id } }
     );
 

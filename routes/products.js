@@ -136,7 +136,7 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
       price_NSL,
       price_usdt,
       daily_income_NSL,
-      validity_days: validity_days || 60,
+      validity_days: validity_days || 7,
       description,
       benefits: benefits || [],
       active: true
@@ -158,12 +158,18 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
 // Added adminLimiter
 router.patch('/:id', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateUpdateProduct, async (req, res) => {
   try {
-    const { price_NSL, price_usdt, daily_income_NSL, active, description, benefits } = req.body;
+    const { price_NSL, price_usdt, daily_income_NSL, validity_days, active, description, benefits } = req.body;
 
-    await Product.update(
-      { price_NSL, price_usdt, daily_income_NSL, active, description, benefits },
-      { where: { id: req.params.id } }
-    );
+    const updates = {};
+    if (price_NSL       !== undefined) updates.price_NSL       = price_NSL;
+    if (price_usdt      !== undefined) updates.price_usdt      = price_usdt;
+    if (daily_income_NSL !== undefined) updates.daily_income_NSL = daily_income_NSL;
+    if (validity_days   !== undefined) updates.validity_days   = validity_days;
+    if (active          !== undefined) updates.active          = active;
+    if (description     !== undefined) updates.description     = description;
+    if (benefits        !== undefined) updates.benefits        = benefits;
+
+    await Product.update(updates, { where: { id: req.params.id } });
 
     const product = await Product.findByPk(req.params.id);
 

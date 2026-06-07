@@ -4,26 +4,31 @@ const path    = require('path');
 const fs      = require('fs');
 const { User, Transaction, sequelize } = require('../models');
 const { authenticate } = require('../middleware/auth');
-const { transactionLimiter } = require('../middleware/rateLimiter');
+const { transactionLimiter } = require('../middleware/security');
+const { assertImageMagicBytes } = require('../middleware/upload');
 const logger  = require('../utils/logger');
 const { FEE } = require('../config/constants');
+const { put: blobPut } = require('@vercel/blob');
+const isVercel = process.env.VERCEL === '1';
 
 const router = express.Router();
 
 const SLL_PER_NSL = () => parseFloat(process.env.ORANGE_SLL_PER_NSL || 100);
 
-// Multer for screenshot uploads
-const omStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = 'uploads/payments';
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `om_${req.user.id}_${Date.now()}${ext}`);
-  }
-});
+// Multer for screenshot uploads: memory on Vercel, disk locally
+const omStorage = isVercel
+  ? multer.memoryStorage()
+  : multer.diskStorage({
+      destination: (req, file, cb) => {
+        const dir = 'uploads/payments';
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        cb(null, dir);
+      },
+      filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname);
+        cb(null, `om_${req.user.id}_${Date.now()}${ext}`);
+      }
+    });
 const omUpload = multer({
   storage: omStorage,
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -35,10 +40,13 @@ const omUpload = multer({
 
 // ── POST /api/orange-money/manual-deposit ─────────────────────────────────
 // User uploads screenshot of Orange Money receipt; admin approves manually.
-router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single('screenshot'), async (req, res) => {
+router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single('screenshot'), assertImageMagicBytes, async (req, res) => {
   try {
-    const { amount_NSL, amount_SLE, reference_id, sender_number, receiver_number, timestamp_receipt } = req.body;
+    const { amount_NSL, amount_SLE, reference_id, sender_number, receiver_number, timestamp_receipt, provider } = req.body;
     const nsl = parseFloat(amount_NSL);
+    const isAfricell = (provider || '').toLowerCase() === 'africell';
+    const paymentMethod = isAfricell ? 'africell' : 'orange_money';
+    const networkLabel  = isAfricell ? 'Africell' : 'Orange Money';
 
     if (!nsl || nsl < 10) return res.status(400).json({ message: 'Minimum deposit is 10 NSL' });
     if (!reference_id?.trim()) return res.status(400).json({ message: 'Reference ID is required' });
@@ -48,7 +56,17 @@ router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single
     const existing = await Transaction.findOne({ where: { reference_id: reference_id.trim() } });
     if (existing) return res.status(400).json({ message: 'This reference ID has already been submitted.' });
 
-    const screenshotPath = req.file.path;
+    let screenshotPath;
+    if (isVercel) {
+      const ext = path.extname(req.file.originalname) || '.jpg';
+      const blob = await blobPut(`payments/${req.user.id}/${Date.now()}${ext}`, req.file.buffer, {
+        access: 'public',
+        contentType: req.file.mimetype,
+      });
+      screenshotPath = blob.url;
+    } else {
+      screenshotPath = req.file.path;
+    }
 
     await Transaction.create({
       user_id:          req.user.id,
@@ -56,8 +74,8 @@ router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single
       amount_NSL:       nsl,
       amount_usdt:      0,
       status:           'pending',
-      payment_method:   'orange_money',
-      deposit_network:  'Orange Money',
+      payment_method:   paymentMethod,
+      deposit_network:  networkLabel,
       reference_id:     reference_id.trim(),
       payment_proof:    screenshotPath,
       notes:            JSON.stringify({ amount_SLE, sender_number, receiver_number, timestamp_receipt }),
@@ -72,59 +90,11 @@ router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single
 });
 
 // ── POST /api/orange-money/callback ──────────────────────────────────────
-// Orange Money posts here on payment completion (notif_url).
-router.post('/callback', async (req, res) => {
-  try {
-    const { order_id, status, pay_token } = req.body;
-    logger.info('Orange Money callback received:', req.body);
-
-    if (!order_id) {
-      return res.status(400).json({ message: 'Missing order_id' });
-    }
-
-    // Find the pending transaction by notes (order_id)
-    const transaction = await Transaction.findOne({
-      where: { notes: order_id, payment_method: 'orange_money', status: 'pending' },
-      include: [{ model: User, as: 'user' }],
-    });
-
-    if (!transaction) {
-      logger.warn(`Orange Money callback: no pending transaction for order ${order_id}`);
-      return res.status(404).json({ message: 'Transaction not found' });
-    }
-
-    // Verify status with Orange Money directly (don't trust callback body alone)
-    let confirmed = status === 'SUCCESS';
-    if (pay_token) {
-      try {
-        const verification = await om.getPaymentStatus(pay_token);
-        confirmed = verification.status === 'SUCCESS';
-      } catch (_) { /* use callback status if verification fails */ }
-    }
-
-    if (confirmed) {
-      await sequelize.transaction(async (t) => {
-        transaction.status = 'approved';
-        transaction.approved_at = new Date();
-        await transaction.save({ transaction: t });
-
-        const user = transaction.user;
-        user.balance_NSL = parseFloat(user.balance_NSL) + parseFloat(transaction.amount_NSL);
-        await user.save({ transaction: t });
-      });
-
-      logger.info(`Orange Money deposit approved: ${order_id} — +${transaction.amount_NSL} NSL for user ${transaction.user_id}`);
-    } else {
-      transaction.status = 'rejected';
-      await transaction.save();
-      logger.info(`Orange Money deposit rejected: ${order_id}`);
-    }
-
-    return res.json({ message: 'Callback processed' });
-  } catch (err) {
-    logger.error('Orange Money callback error:', err.message);
-    return res.status(500).json({ message: 'Callback processing failed' });
-  }
+// Automated callbacks are disabled — this platform uses manual admin approval.
+// Registered so external callers receive a clear 501 rather than a 404 that triggers retries.
+router.post('/callback', (req, res) => {
+  logger.warn('Orange Money callback received but automated processing is disabled', { ip: req.ip });
+  return res.status(501).json({ message: 'Automated callbacks are not enabled. Deposits are reviewed manually by admin.' });
 });
 
 // ── POST /api/orange-money/withdraw ──────────────────────────────────────
@@ -179,28 +149,8 @@ router.post('/withdraw', authenticate, transactionLimiter, async (req, res) => {
       }, { transaction: t });
     });
 
-    // Attempt Orange Money transfer (non-blocking — transaction already created)
-    let omResult = null;
-    try {
-      omResult = await om.initiateTransfer({
-        recipientMSISDN: cleanPhone,
-        amountSLL,
-        orderId,
-        description: `SalonMoney withdrawal — ${netNSL.toFixed(2)} NSL`,
-      });
-
-      // Auto-approve if Orange Money confirms immediately
-      if (omResult?.status === 'SUCCESS') {
-        await Transaction.update(
-          { status: 'approved', approved_at: new Date() },
-          { where: { notes: orderId } }
-        );
-      }
-    } catch (omErr) {
-      logger.error('Orange Money transfer API error (transaction stays pending for admin review):', omErr.response?.data || omErr.message);
-    }
-
-    logger.info(`Orange Money withdrawal submitted: ${orderId} — ${nsl} NSL for user ${user.id}`);
+    // Withdrawal stays pending — admin reviews and processes manually.
+    logger.info(`Orange Money withdrawal submitted (pending admin review): ${orderId} — ${nsl} NSL for user ${user.id}`);
 
     return res.json({
       message:    'Withdrawal submitted. Funds will arrive via Orange Money shortly.',
