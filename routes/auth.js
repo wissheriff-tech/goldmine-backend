@@ -121,7 +121,7 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
         password_hash: password,
         referral_code,
         referred_by: referred_by || null,
-        status: 'pending',
+        status: 'active',
         email: email ? email.toLowerCase() : null,
         emailVerificationToken: verificationToken,
         emailVerificationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
@@ -133,8 +133,8 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
       logger.info(`New user registered: ${username} (${phone}) - verification email sent`);
 
       return res.status(201).json({
-        message: 'User registered successfully! Please check your email to verify your account.',
-        requiresEmailVerification: true,
+        message: 'Account created successfully! You can now sign in.',
+        requiresEmailVerification: false,
         user: {
           id: user.id,
           username: user.username,
@@ -151,7 +151,7 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
         password_hash: password,
         referral_code,
         referred_by: referred_by || null,
-        status: 'pending',
+        status: 'active',
         email: null,
         authProvider: 'local'
       });
@@ -159,7 +159,7 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
       logger.info(`New user registered: ${username} (${phone})`);
 
       res.status(201).json({
-        message: 'User registered successfully. Awaiting admin verification.',
+        message: 'Account created successfully! You can now sign in.',
         user: {
           id: user.id,
           username: user.username,
