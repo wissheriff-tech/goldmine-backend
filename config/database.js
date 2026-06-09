@@ -2,11 +2,15 @@ const { Sequelize } = require('sequelize');
 const logger = require('../utils/logger');
 
 const isProd = process.env.NODE_ENV === 'production';
+const dbUrl = process.env.DATABASE_URL || '';
 
 let sequelize;
 
-if (isProd) {
-  const dbUrl = process.env.DATABASE_URL || '';
+if (isProd || dbUrl) {
+  if (!dbUrl) {
+    logger.error('DATABASE_URL is not set. Set it in your Vercel environment variables.');
+    process.exit(1);
+  }
   const isMysql = dbUrl.startsWith('mysql://') || dbUrl.startsWith('mysql2://');
   const dialect = isMysql ? 'mysql' : 'postgres';
 
@@ -14,7 +18,6 @@ if (isProd) {
     dialect,
     logging: false,
     define: { timestamps: true, underscored: false },
-    // Pass dialect modules explicitly to avoid Lambda module-resolution issues
     dialectModule: isMysql ? require('mysql2') : require('pg'),
     dialectOptions: isMysql
       ? { connectTimeout: 20000 }

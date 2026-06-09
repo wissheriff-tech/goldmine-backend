@@ -124,7 +124,11 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
 // Added adminLimiter
 router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateCreateProduct, async (req, res) => {
   try {
-    const { name, price_NSL, price_usdt, daily_income_NSL, validity_days, description, benefits } = req.body;
+    const { name, price_NSL, daily_income_NSL, validity_days, description, benefits } = req.body;
+    const NSL_RATE = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
+    const price_usdt = req.body.price_usdt != null
+      ? parseFloat(req.body.price_usdt)
+      : parseFloat((price_NSL / NSL_RATE).toFixed(2));
 
     const productExists = await Product.findOne({ where: { name } });
     if (productExists) {
@@ -136,7 +140,7 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
       price_NSL,
       price_usdt,
       daily_income_NSL,
-      validity_days: validity_days || 7,
+      validity_days: validity_days || 60,
       description,
       benefits: benefits || [],
       active: true
@@ -158,7 +162,11 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
 // Added adminLimiter
 router.patch('/:id', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateUpdateProduct, async (req, res) => {
   try {
-    const { price_NSL, price_usdt, daily_income_NSL, validity_days, active, description, benefits } = req.body;
+    const { price_NSL, daily_income_NSL, validity_days, active, description, benefits } = req.body;
+    const NSL_RATE = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
+    const price_usdt = req.body.price_usdt != null
+      ? parseFloat(req.body.price_usdt)
+      : (price_NSL != null ? parseFloat((price_NSL / NSL_RATE).toFixed(2)) : undefined);
 
     const updates = {};
     if (price_NSL       !== undefined) updates.price_NSL       = price_NSL;
