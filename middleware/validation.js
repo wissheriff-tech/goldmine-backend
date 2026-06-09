@@ -29,7 +29,8 @@ const signupSchema = Joi.object({
     .min(3)
     .max(30)
     .lowercase()
-    .required()
+    .optional()
+    .allow('')
     .messages({
       'string.alphanum': 'Username must contain only letters and numbers',
       'string.min': 'Username must be at least 3 characters',
