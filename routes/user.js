@@ -13,8 +13,7 @@ const logger = require('../utils/logger');
 const { profileUpload, paymentUpload, kycUpload, assertImageMagicBytes, assertDocumentMagicBytes } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs');
-const { put: blobPut } = require('@vercel/blob');
-const isVercel = process.env.VERCEL === '1';
+const { uploadToDrive } = require('../utils/googleDrive');
 
 // Validation and Security Middleware
 const {
@@ -611,25 +610,10 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
       if (!fileArray || fileArray.length === 0) continue;
       const file = fileArray[0];
       const kycField = `kyc_${fieldName}`;
-      let docUrl;
-
-      if (isVercel) {
-        // On Vercel: stream buffer to Vercel Blob
-        const ext = path.extname(file.originalname) || '.jpg';
-        const blobPath = `kyc/${user.id}/${fieldName}-${Date.now()}${ext}`;
-        const blob = await blobPut(blobPath, file.buffer, {
-          access: 'public',
-          contentType: file.mimetype,
-        });
-        docUrl = blob.url;
-      } else {
-        // Local: file already written to disk by multer
-        if (user[kycField]) {
-          const oldPath = path.join(__dirname, '../', user[kycField]);
-          if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-        }
-        docUrl = `/uploads/kyc/${file.filename}`;
-      }
+      const ext = path.extname(file.originalname) || '.jpg';
+      const filename = `kyc_${user.id}_${fieldName}_${Date.now()}${ext}`;
+      const { viewUrl } = await uploadToDrive(file.buffer, filename, file.mimetype);
+      const docUrl = viewUrl;
 
       user[kycField] = docUrl;
       uploadedDocs[fieldName] = docUrl;
