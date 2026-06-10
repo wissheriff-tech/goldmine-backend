@@ -237,6 +237,13 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
       const user = await User.findOne({ where: { id: req.user.id }, lock: t.LOCK.UPDATE, transaction: t });
       if (!user) { const e = new Error('User not found'); e.status = 404; throw e; }
 
+      if (user.role !== 'superadmin' && !user.kyc_verified) {
+        const e = new Error('Identity verification required before withdrawal. Please complete KYC in your account settings.');
+        e.status = 403;
+        e.kyc_required = true;
+        throw e;
+      }
+
       const feePctW = user.role === 'superadmin' ? 0 : await ps.get('withdrawal_fee_pct');
       const withdrawalFee = (amount_NSL * feePctW) / 100;
       const netAmount = amount_NSL - withdrawalFee;
@@ -300,7 +307,11 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
   } catch (error) {
     logger.error('Withdrawal error:', error);
     const status = error.status || 500;
-    res.status(status).json({ message: error.message || 'Error processing withdrawal', ...(error.detail || {}) });
+    res.status(status).json({
+      message: error.message || 'Error processing withdrawal',
+      ...(error.detail || {}),
+      ...(error.kyc_required ? { kyc_required: true } : {}),
+    });
   }
 });
 
