@@ -8,6 +8,7 @@ const { transactionLimiter } = require('../middleware/security');
 const { assertImageMagicBytes } = require('../middleware/upload');
 const logger  = require('../utils/logger');
 const { FEE } = require('../config/constants');
+const ps = require('../utils/platformSettings');
 const { put: blobPut } = require('@vercel/blob');
 const isVercel = process.env.VERCEL === '1';
 
@@ -114,13 +115,10 @@ router.post('/withdraw', authenticate, transactionLimiter, async (req, res) => {
     const user = await User.findByPk(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    // Calculate fee
-    let fee    = 0;
-    let netNSL = nsl;
-    if (user.role !== 'superadmin') {
-      fee    = nsl * FEE.WITHDRAWAL_FEE_PERCENTAGE / 100;
-      netNSL = nsl - fee;
-    }
+    // Calculate fee — Orange Money uses a higher rate than crypto withdrawals
+    const omFeePct = user.role === 'superadmin' ? 0 : await ps.get('om_withdrawal_fee_pct');
+    let fee    = nsl * omFeePct / 100;
+    let netNSL = nsl - fee;
 
     if (parseFloat(user.balance_NSL) < nsl) {
       return res.status(400).json({ message: 'Insufficient balance' });

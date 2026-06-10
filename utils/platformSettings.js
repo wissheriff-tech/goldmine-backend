@@ -2,11 +2,12 @@ const { PaymentSetting } = require('../models');
 
 // Defaults — used when DB has no value
 const DEFAULTS = {
-  referral_l1_pct:   3,
-  referral_l2_pct:   2,
-  referral_l3_pct:   1,
-  recharge_fee_pct:  5,
-  withdrawal_fee_pct: 10,
+  referral_l1_pct:      3,
+  referral_l2_pct:      2,
+  referral_l3_pct:      1,
+  recharge_fee_pct:     5,
+  withdrawal_fee_pct:   10,
+  om_withdrawal_fee_pct: 20,
   dur_short:         3,
   dur_week:          7,
   dur_month:         30,
