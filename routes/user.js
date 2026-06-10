@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const { sequelize } = require('../models');
 const User = require('../models/User');
 const { FEE } = require('../config/constants');
+const ps = require('../utils/platformSettings');
 const Transaction = require('../models/Transaction');
 const Referral = require('../models/Referral');
 const Product = require('../models/Product');
@@ -187,12 +188,12 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
       });
     }
 
-    // Calculate fee: 15% for standard users, 0% for super admin
+    const feePct = user.role === 'superadmin' ? 0 : await ps.get('withdrawal_fee_pct');
     let withdrawalFee = 0;
     let netAmount = amount_NSL;
 
-    if (user.role !== 'superadmin') {
-      withdrawalFee = (amount_NSL * FEE.WITHDRAWAL_FEE_PERCENTAGE) / 100;
+    if (feePct > 0) {
+      withdrawalFee = (amount_NSL * feePct) / 100;
       netAmount = amount_NSL - withdrawalFee;
     }
 
@@ -202,7 +203,7 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
       requested_amount_NSL: amount_NSL,
       user_role: user.role,
       fee_breakdown: {
-        fee_percentage: user.role === 'superadmin' ? '0%' : `${FEE.WITHDRAWAL_FEE_PERCENTAGE}%`,
+        fee_percentage: user.role === 'superadmin' ? '0%' : `${feePct}%`,
         fee_amount: withdrawalFee.toFixed(2),
         is_exempt: user.role === 'superadmin'
       },
@@ -236,7 +237,8 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
       const user = await User.findOne({ where: { id: req.user.id }, lock: t.LOCK.UPDATE, transaction: t });
       if (!user) { const e = new Error('User not found'); e.status = 404; throw e; }
 
-      const withdrawalFee = user.role === 'superadmin' ? 0 : (amount_NSL * FEE.WITHDRAWAL_FEE_PERCENTAGE) / 100;
+      const feePctW = user.role === 'superadmin' ? 0 : await ps.get('withdrawal_fee_pct');
+      const withdrawalFee = (amount_NSL * feePctW) / 100;
       const netAmount = amount_NSL - withdrawalFee;
 
       if (netAmount <= 0) { const e = new Error('Withdrawal amount too small to cover fees'); e.status = 400; throw e; }

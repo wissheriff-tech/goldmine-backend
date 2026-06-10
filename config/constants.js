@@ -12,17 +12,17 @@ module.exports = {
     SUPPORTED_CURRENCIES: ['NSL', 'USDT']
   },
 
-  // Referral Program Settings — 3-level commission on recharge approvals
+  // Referral Program Settings — 3-level commission on investment purchases
   REFERRAL: {
-    LEVELS: [3, 2, 1], // L1=3%, L2=2%, L3=1% of credited NSL
+    LEVELS: [3, 2, 1], // L1=3%, L2=2%, L3=1% — overridden by platform settings at runtime
     MAX_REFERRAL_LEVEL: 3,
     MIN_RECHARGE_FOR_BONUS: 0
   },
 
-  // Fee Settings
+  // Fee Settings — overridden by platform settings at runtime
   FEE: {
-    RECHARGE_FEE_PERCENTAGE: parseFloat(process.env.RECHARGE_FEE_PERCENTAGE) || 15,
-    WITHDRAWAL_FEE_PERCENTAGE: parseFloat(process.env.WITHDRAWAL_FEE_PERCENTAGE) || 15,
+    RECHARGE_FEE_PERCENTAGE: parseFloat(process.env.RECHARGE_FEE_PERCENTAGE) || 5,
+    WITHDRAWAL_FEE_PERCENTAGE: parseFloat(process.env.WITHDRAWAL_FEE_PERCENTAGE) || 10,
     SUPER_ADMIN_EXEMPT: true // Super admin exempt from all fees
   },
 

@@ -6,7 +6,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
-const { FEE, REFERRAL } = require('../config/constants');
+const { FEE } = require('../config/constants');
+const ps = require('../utils/platformSettings');
 
 // Validation Middleware
 const {
@@ -18,9 +19,10 @@ const {
 const { financeLimiter } = require('../middleware/security');
 const router = express.Router();
 
-// Walk up to 3 referral levels and credit commissions (fire-and-forget after recharge approval)
+// Walk up to 3 referral levels and credit commissions on recharge approval
 async function payReferralCommissions(depositor, amountNSL) {
-  const pcts = REFERRAL.LEVELS; // [3, 2, 1]
+  const s = await ps.getAll();
+  const pcts = [s.referral_l1_pct, s.referral_l2_pct, s.referral_l3_pct];
   let currentCode = depositor.referred_by;
 
   for (let level = 0; level < pcts.length; level++) {
@@ -41,12 +43,12 @@ async function payReferralCommissions(depositor, amountNSL) {
         amount_usdt:    0,
         status:         'approved',
         payment_method: 'manual',
-        notes:          `L${level + 1} referral commission (${pcts[level]}%) from deposit of ${amountNSL} NSL by user #${depositor.id}`,
+        notes:          `L${level + 1} referral commission (${pcts[level]}%) from recharge of ${amountNSL} NSL by user #${depositor.id}`,
         approved_at:    new Date(),
       }, { transaction: t });
     });
 
-    logger.info(`Referral L${level + 1} commission: +${commission} NSL → user #${referrer.id} (${pcts[level]}% of ${amountNSL} NSL)`);
+    logger.info(`Referral L${level + 1}: +${commission} NSL → user #${referrer.id} (${pcts[level]}% of ${amountNSL})`);
     currentCode = referrer.referred_by;
   }
 }
@@ -118,16 +120,17 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
       if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
 
       if (transaction.type === 'recharge') {
+        const feePct = user.role === 'superadmin' ? 0 : await ps.get('recharge_fee_pct');
         let creditAmount = transaction.amount_NSL;
         let rechargeFee = 0;
-        if (user.role !== 'superadmin') {
-          rechargeFee = (transaction.amount_NSL * FEE.RECHARGE_FEE_PERCENTAGE) / 100;
+        if (feePct > 0) {
+          rechargeFee = (transaction.amount_NSL * feePct) / 100;
           creditAmount = transaction.amount_NSL - rechargeFee;
         }
         user.balance_NSL += creditAmount;
-        logger.info(`Recharge approved: User ${user.phone}, Amount: ${transaction.amount_NSL} NSL, Fee: ${rechargeFee.toFixed(2)} NSL, Credited: ${creditAmount.toFixed(2)} NSL`);
+        logger.info(`Recharge approved: User ${user.phone}, Amount: ${transaction.amount_NSL} NSL, Fee: ${rechargeFee.toFixed(2)} NSL (${feePct}%), Credited: ${creditAmount.toFixed(2)} NSL`);
         if (rechargeFee > 0) {
-          transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${FEE.RECHARGE_FEE_PERCENTAGE}%)`;
+          transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${feePct}%)`;
         }
       } else if (transaction.type === 'withdrawal') {
         // Balance was already deducted at submission time — just mark approved so admin knows to send funds.
