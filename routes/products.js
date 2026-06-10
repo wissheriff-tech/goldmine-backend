@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Public: get available duration options
+// Public: get duration options + platform info for landing page
 router.get('/durations', async (req, res) => {
   try {
     const s = await ps.getAll();
@@ -43,6 +43,15 @@ router.get('/durations', async (req, res) => {
         { key: 'month', label: '1 Month',               days: s.dur_month  },
         { key: 'promo', label: s.dur_promo_label,       days: s.dur_promo  },
       ],
+      referral: {
+        l1_pct: s.referral_l1_pct,
+        l2_pct: s.referral_l2_pct,
+        l3_pct: s.referral_l3_pct,
+      },
+      fees: {
+        recharge_fee_pct:   s.recharge_fee_pct,
+        withdrawal_fee_pct: s.withdrawal_fee_pct,
+      },
     });
   } catch (err) {
     res.status(500).json({ message: 'Error fetching durations', error: err.message });
