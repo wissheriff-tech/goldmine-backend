@@ -1051,8 +1051,8 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
         result = { txType: 'withdrawal', txId: tx.id };
         logger.info(`Withdrawal ${tx.id} approved by admin ${req.user.username}`);
       } else {
-        // Deposit: credit balance now (with fee)
-        const feePercent = parseFloat(process.env.RECHARGE_FEE_PERCENTAGE || 10);
+        // Deposit: credit balance now — admin enters the raw SLE/NSL from receipt, fee applied here
+        const feePercent = await ps.get('recharge_fee_pct');
         const baseNSL = parseFloat(approved_NSL || tx.amount_NSL);
         const creditNSL = baseNSL * (1 - feePercent / 100);
 

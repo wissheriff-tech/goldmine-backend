@@ -43,13 +43,14 @@ const omUpload = multer({
 // User uploads screenshot of Orange Money receipt; admin approves manually.
 router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single('screenshot'), assertImageMagicBytes, async (req, res) => {
   try {
-    const { amount_NSL, amount_SLE, reference_id, sender_number, receiver_number, timestamp_receipt, provider } = req.body;
-    const nsl = parseFloat(amount_NSL);
+    const { amount_SLE, amount_NSL, reference_id, sender_number, receiver_number, timestamp_receipt, provider } = req.body;
+    // Accept SLE amount (what user sent on their receipt) — fall back to NSL for legacy clients
+    const rawAmount = parseFloat(amount_SLE || amount_NSL);
     const isAfricell = (provider || '').toLowerCase() === 'africell';
     const paymentMethod = isAfricell ? 'africell' : 'orange_money';
     const networkLabel  = isAfricell ? 'Africell' : 'Orange Money';
 
-    if (!nsl || nsl < 10) return res.status(400).json({ message: 'Minimum deposit is 10 NSL' });
+    if (!rawAmount || rawAmount < 1000) return res.status(400).json({ message: 'Minimum deposit is 1,000 SLE' });
     if (!reference_id?.trim()) return res.status(400).json({ message: 'Reference ID is required' });
     if (!req.file) return res.status(400).json({ message: 'Screenshot is required' });
 
@@ -72,17 +73,17 @@ router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single
     await Transaction.create({
       user_id:          req.user.id,
       type:             'recharge',
-      amount_NSL:       nsl,
+      amount_NSL:       rawAmount,        // gross SLE amount (1 SLE = 1 NSL at current rate)
       amount_usdt:      0,
       status:           'pending',
       payment_method:   paymentMethod,
       deposit_network:  networkLabel,
       reference_id:     reference_id.trim(),
       payment_proof:    screenshotPath,
-      notes:            JSON.stringify({ amount_SLE, sender_number, receiver_number, timestamp_receipt }),
+      notes:            JSON.stringify({ amount_SLE: rawAmount, sender_number, receiver_number, timestamp_receipt }),
     });
 
-    logger.info(`Orange Money manual deposit submitted: ref=${reference_id} ${nsl} NSL for user #${req.user.id}`);
+    logger.info(`${networkLabel} manual deposit submitted: ref=${reference_id} ${rawAmount} SLE for user #${req.user.id}`);
     return res.json({ message: 'Deposit proof submitted. Admin will credit your account shortly.' });
   } catch (err) {
     logger.error('Orange Money manual-deposit error:', err.message);
