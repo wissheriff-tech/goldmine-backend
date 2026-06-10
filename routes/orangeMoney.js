@@ -13,7 +13,7 @@ const isVercel = process.env.VERCEL === '1';
 
 const router = express.Router();
 
-const SLL_PER_NSL = () => parseFloat(process.env.ORANGE_SLL_PER_NSL || 100);
+const SLL_PER_NSL = () => parseFloat(process.env.ORANGE_SLL_PER_NSL || 1);
 
 // Multer for screenshot uploads: memory on Vercel, disk locally
 const omStorage = isVercel
