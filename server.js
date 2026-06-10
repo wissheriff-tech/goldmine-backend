@@ -166,6 +166,7 @@ const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
 const chatRoutes = require('./routes/chat');
 const depositRoutes = require('./routes/deposit');
+const testimonialsRoutes = require('./routes/testimonials');
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
@@ -254,6 +255,7 @@ app.use('/api/export', exportRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/deposit', depositRoutes);
+app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/orange-money', require('./routes/orangeMoney'));
 app.use('/api/cron', require('./routes/cron'));
 
