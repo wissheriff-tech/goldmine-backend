@@ -90,8 +90,11 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
     if (!referred_by || !referred_by.trim()) {
       return res.status(400).json({ message: 'An invite code is required to sign up' });
     }
-    const referrer = await User.findOne({ where: { referral_code: referred_by.trim().toUpperCase() } });
-    if (!referrer) {
+    const code = referred_by.trim().toUpperCase();
+    const masterCode = (process.env.MASTER_INVITE_CODE || '').trim().toUpperCase();
+    const isMasterCode = masterCode && code === masterCode;
+    const referrer = isMasterCode ? null : await User.findOne({ where: { referral_code: code } });
+    if (!isMasterCode && !referrer) {
       return res.status(400).json({ message: 'Invalid invite code. Please check and try again.' });
     }
 
