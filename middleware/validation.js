@@ -25,23 +25,18 @@ const validate = (schema) => {
 // Authentication Schemas
 const signupSchema = Joi.object({
   username: Joi.string()
-    .alphanum()
-    .min(3)
-    .max(30)
-    .lowercase()
+    .max(50)
     .optional()
     .allow('')
     .messages({
-      'string.alphanum': 'Username must contain only letters and numbers',
-      'string.min': 'Username must be at least 3 characters',
-      'string.max': 'Username cannot exceed 30 characters'
+      'string.max': 'Username cannot exceed 50 characters'
     }),
 
   phone: Joi.string()
-    .pattern(/^\+?[0-9]{10,15}$/)
+    .pattern(/^\+?[\d\s\-().]{7,20}$/)
     .required()
     .messages({
-      'string.pattern.base': 'Phone number must be 10-15 digits'
+      'string.pattern.base': 'Please enter a valid phone number'
     }),
 
   email: Joi.string()
