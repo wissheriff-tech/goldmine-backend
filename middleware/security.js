@@ -210,8 +210,8 @@ const validateContentType = (req, res, next) => {
     const contentType = req.get('content-type');
     const contentLength = parseInt(req.get('content-length') || '0', 10);
 
-    // Allow empty-body requests (no content to validate)
-    if (!contentLength && !req.readable) return next();
+    // Allow empty-body requests and chunked transfers with no content-length
+    if (!contentLength) return next();
 
     if (!contentType || (!contentType.includes('application/json') && !contentType.includes('multipart/form-data'))) {
       return res.status(400).json({
