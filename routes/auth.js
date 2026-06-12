@@ -455,10 +455,14 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
     user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
     await user.save();
 
-    // Send reset email
-    await emailService.sendPasswordResetEmail(email, user.username, resetToken);
+    // Attempt to send reset email — non-fatal if email is not configured
+    try {
+      await emailService.sendPasswordResetEmail(email, user.username, resetToken);
+    } catch (emailError) {
+      logger.error('Password reset email failed (check EMAIL_USER/EMAIL_PASSWORD):', emailError.message);
+    }
 
-    logger.info(`Password reset requested for: ${email}`);
+    logger.info(`Password reset token saved for: ${email}`);
     res.json({ message: 'If that email exists, a password reset link has been sent.' });
   } catch (error) {
     logger.error('Forgot password error:', error);
