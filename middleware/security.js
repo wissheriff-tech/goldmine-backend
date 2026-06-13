@@ -208,19 +208,15 @@ const requestLogger = (req, res, next) => {
 const validateContentType = (req, res, next) => {
   if (['POST', 'PUT', 'PATCH'].includes(req.method)) {
     const contentType = req.get('content-type');
-    const contentLength = parseInt(req.get('content-length') || '0', 10);
-
-    // Allow empty-body requests and chunked transfers with no content-length
-    if (!contentLength) return next();
-
-    if (!contentType || (!contentType.includes('application/json') && !contentType.includes('multipart/form-data'))) {
+    // Only reject when a content-type IS provided but it's the wrong type.
+    // No content-type = no body (or empty body) — allow through.
+    if (contentType && !contentType.includes('application/json') && !contentType.includes('multipart/form-data')) {
       return res.status(400).json({
         success: false,
         message: 'Invalid content-type. Expected application/json or multipart/form-data'
       });
     }
   }
-
   next();
 };
 
