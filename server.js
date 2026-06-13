@@ -184,8 +184,12 @@ const initDb = async () => {
     // Add enum values and missing columns if not already present
     try {
       await sequelize.query(`ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'orange_money'`);
+      await sequelize.query(`ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'africell'`);
       await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "reference_id" VARCHAR(255)`);
       await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "approved_at" TIMESTAMP WITH TIME ZONE`);
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "rejected_at" TIMESTAMP WITH TIME ZONE`);
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "admin_notes" TEXT`);
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "confirmations" INTEGER DEFAULT 0`);
     } catch (_) { /* ignore */ }
     try {
       await sequelize.query(`ALTER TYPE "enum_chats_status" ADD VALUE IF NOT EXISTS 'closed'`);

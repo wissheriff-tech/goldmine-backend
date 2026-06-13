@@ -171,7 +171,12 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
   } catch (error) {
     if (error.status) return res.status(error.status).json({ message: error.message });
     logger.error('Transaction approval error:', error);
-    res.status(500).json({ message: 'Error approving transaction', error: error.message });
+    res.status(500).json({
+      message: 'Error approving transaction',
+      error: error.message,
+      errorType: error.name,
+      errorDetail: error.parent?.message || error.original?.message || null,
+    });
   }
 });
 
