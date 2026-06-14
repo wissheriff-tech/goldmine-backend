@@ -53,6 +53,12 @@ async function payReferralCommissions(depositor, amountNSL) {
   }
 }
 
+// Public: NSL/USDT exchange rate
+router.get('/nsl-rate', (req, res) => {
+  const nslPerUsdt = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 25);
+  res.json({ nsl_per_usdt: nslPerUsdt });
+});
+
 // Finance: Get pending transactions
 router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
   try {

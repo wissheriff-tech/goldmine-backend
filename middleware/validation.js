@@ -323,7 +323,7 @@ const addCurrencySchema = Joi.object({
 
   reason: Joi.string()
     .required()
-    .min(5)
+    .min(3)
 });
 
 const approveRejectSchema = Joi.object({
