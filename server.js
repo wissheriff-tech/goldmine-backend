@@ -216,11 +216,6 @@ const initDb = async () => {
         admin.username = adminUsername;
         changed = true;
       }
-      // Always sync password from env so changing SUPER_ADMIN_PASSWORD takes effect
-      if (process.env.SUPER_ADMIN_PASSWORD) {
-        admin.password_hash = process.env.SUPER_ADMIN_PASSWORD;
-        changed = true;
-      }
       if (changed) await admin.save();
       logger.info('Vercel DB: superadmin synced');
     }
