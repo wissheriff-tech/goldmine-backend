@@ -164,7 +164,6 @@ const analyticsRoutes = require('./routes/analytics');
 const batchRoutes = require('./routes/batch');
 const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
-const chatRoutes = require('./routes/chat');
 const depositRoutes = require('./routes/deposit');
 const testimonialsRoutes = require('./routes/testimonials');
 
@@ -191,12 +190,6 @@ const initDb = async () => {
       await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "admin_notes" TEXT`);
       await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "confirmations" INTEGER DEFAULT 0`);
     } catch (_) { /* ignore */ }
-    try {
-      await sequelize.query(`ALTER TYPE "enum_chats_status" ADD VALUE IF NOT EXISTS 'closed'`);
-      await sequelize.query(`ALTER TABLE "chats" ADD COLUMN IF NOT EXISTS "closed_at" TIMESTAMP WITH TIME ZONE`);
-      await sequelize.query(`ALTER TABLE "chats" ADD COLUMN IF NOT EXISTS "rating" INTEGER`);
-      await sequelize.query(`ALTER TABLE "chats" ADD COLUMN IF NOT EXISTS "feedback" TEXT`);
-    } catch (_) { /* ignore */ }
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
     const genCode = () => Math.random().toString(36).substring(2, 12).toUpperCase();
@@ -221,6 +214,10 @@ const initDb = async () => {
       }
       if (admin.username !== adminUsername) {
         admin.username = adminUsername;
+        changed = true;
+      }
+      // Always sync password from env so changing SUPER_ADMIN_PASSWORD takes effect
+      if (process.env.SUPER_ADMIN_PASSWORD) {
         admin.password_hash = process.env.SUPER_ADMIN_PASSWORD;
         changed = true;
       }
@@ -263,7 +260,6 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/batch', batchRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/security', securityRoutes);
-app.use('/api/chat', chatRoutes);
 app.use('/api/deposit', depositRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/orange-money', require('./routes/orangeMoney'));
@@ -274,6 +270,27 @@ app.get('/api', (req, res) => {
   res.json({ name: 'SalonMoney API', status: 'running', version: '1.0.0' });
 });
 
+
+// One-time superadmin password reset — remove after use
+app.post('/api/reset-admin-password', async (req, res) => {
+  const { secret, new_password } = req.body;
+  if (secret !== 'sm-reset-2026-tmp') return res.status(403).json({ message: 'Forbidden' });
+  if (!new_password || new_password.length < 6) return res.status(400).json({ message: 'Password too short' });
+  try {
+    const bcrypt = require('bcryptjs');
+    const { sequelize } = require('./config/database');
+    const salt = await bcrypt.genSalt(10);
+    const hashed = await bcrypt.hash(new_password, salt);
+    const [rows] = await sequelize.query(
+      `UPDATE users SET password_hash = :hash WHERE role = 'superadmin' RETURNING username`,
+      { replacements: { hash: hashed } }
+    );
+    if (!rows || rows.length === 0) return res.status(404).json({ message: 'No superadmin found' });
+    res.json({ message: 'Password reset', username: rows[0].username });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
 // Seed products (admin-only, idempotent)
 app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
