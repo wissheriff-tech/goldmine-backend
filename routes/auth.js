@@ -178,9 +178,9 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
 // Login
 router.post('/login', authLimiter, validateLogin, async (req, res) => {
   try {
-    const { username, password, rememberMe } = req.body;
+    const { username, phone, password, rememberMe } = req.body;
 
-    const identifier = username.trim();
+    const identifier = String(username || phone).trim();
     const user = await User.scope('withSecrets').findOne({
       where: {
         [Op.or]: [
@@ -229,7 +229,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
     const { token, refreshToken } = await issueTokens(user, rememberMe, req.headers['user-agent']);
     setCookies(res, token, refreshToken, rememberMe);
 
-    logger.info(`User logged in: ${username} (${user.role})`);
+    logger.info(`User logged in: ${identifier} (${user.role})`);
 
     let redirectTo = '/dashboard';
     if (user.role === 'superadmin' || user.role === 'admin' || user.role === 'finance') redirectTo = '/admin';
@@ -262,7 +262,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
 // Refresh token
 router.post('/refresh', async (req, res) => {
   try {
-    const { refreshToken } = req.body;
+    const refreshToken = req.cookies?.refresh_token || req.body?.refreshToken || req.body?.refresh_token;
 
     if (!refreshToken) {
       return res.status(400).json({ message: 'Refresh token is required' });
@@ -326,7 +326,8 @@ router.post('/change-password', authenticate, validateChangePassword, async (req
 // FIX: Added authLimiter to prevent brute force
 router.post('/verify-2fa', authLimiter, async (req, res) => {
   try {
-    const { userId, code } = req.body;
+    const { userId, code, rememberMe } = req.body;
+    const shouldRemember = rememberMe === true || rememberMe === 'true' || rememberMe === '1';
 
     if (!userId || !code) {
       return res.status(400).json({ message: 'User ID and code are required' });
@@ -357,7 +358,8 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
     user.last_login = new Date();
     await user.save();
 
-    const { token, refreshToken } = await issueTokens(user, false, req.headers['user-agent']);
+    const { token, refreshToken } = await issueTokens(user, shouldRemember, req.headers['user-agent']);
+    setCookies(res, token, refreshToken, shouldRemember);
 
     logger.info(`User completed 2FA login: ${user.username}`);
 

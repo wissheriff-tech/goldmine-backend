@@ -9,6 +9,7 @@ const compression = require('compression');
 const dotenv = require('dotenv');
 const logger = require('./utils/logger');
 const emailService = require('./utils/emailService');
+const { Op } = require('sequelize');
 
 // Security middleware
 const {
@@ -25,6 +26,19 @@ dotenv.config();
 if (!process.env.SUPER_ADMIN_PASSWORD) {
   console.error('WARNING: SUPER_ADMIN_PASSWORD env var is not set');
 }
+
+const SUPER_ADMIN_DEFAULTS = {
+  username: 'superadmin',
+  phone: '+232777777777',
+  email: 'admin@salonmoney.com'
+};
+
+const getSuperAdminConfig = () => ({
+  username: (process.env.SUPER_ADMIN_USERNAME || SUPER_ADMIN_DEFAULTS.username).trim().toLowerCase(),
+  phone: (process.env.SUPER_ADMIN_PHONE || SUPER_ADMIN_DEFAULTS.phone).trim(),
+  email: (process.env.SUPER_ADMIN_EMAIL || SUPER_ADMIN_DEFAULTS.email).trim().toLowerCase(),
+  password: process.env.SUPER_ADMIN_PASSWORD
+});
 
 // Check if running on Vercel (serverless)
 const isVercel = process.env.VERCEL === '1';
@@ -115,6 +129,72 @@ try {
   User = null;
 }
 
+const generateStartupReferralCode = () => Math.random().toString(36).substring(2, 12).toUpperCase();
+
+const syncSuperAdminUser = async (label) => {
+  const adminConfig = getSuperAdminConfig();
+  if (!adminConfig.password) {
+    logger.error(`${label}: SUPER_ADMIN_PASSWORD is required; skipping superadmin create/reset`);
+    return;
+  }
+
+  let admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
+  if (!admin) {
+    admin = await User.scope('withSecrets').findOne({
+      where: {
+        [Op.or]: [
+          { username: adminConfig.username },
+          { phone: adminConfig.phone },
+          { email: adminConfig.email }
+        ]
+      }
+    });
+  }
+
+  if (!admin) {
+    await User.create({
+      username: adminConfig.username,
+      phone: adminConfig.phone,
+      email: adminConfig.email,
+      password_hash: adminConfig.password,
+      role: 'superadmin',
+      referral_code: generateStartupReferralCode(),
+      status: 'active',
+      kyc_verified: true,
+      emailVerified: true
+    });
+    logger.info(`${label}: superadmin seeded`);
+    return;
+  }
+
+  const updates = {};
+  if (admin.username !== adminConfig.username) updates.username = adminConfig.username;
+  if (admin.phone !== adminConfig.phone) updates.phone = adminConfig.phone;
+  if (admin.email !== adminConfig.email) updates.email = adminConfig.email;
+  if (admin.role !== 'superadmin') updates.role = 'superadmin';
+  if (admin.status !== 'active') updates.status = 'active';
+  if (!admin.referral_code || admin.referral_code === 'ADMIN00001') {
+    updates.referral_code = generateStartupReferralCode();
+  }
+  if (!admin.kyc_verified) updates.kyc_verified = true;
+  if (!admin.emailVerified) updates.emailVerified = true;
+
+  let passwordMatches = false;
+  try {
+    passwordMatches = await admin.comparePassword(adminConfig.password);
+  } catch (_) {
+    passwordMatches = false;
+  }
+  if (!passwordMatches) updates.password_hash = adminConfig.password;
+
+  if (Object.keys(updates).length > 0) {
+    await admin.update(updates);
+    logger.info(`${label}: superadmin synced`);
+  } else {
+    logger.info(`${label}: superadmin already synced`);
+  }
+};
+
 // On Vercel: skip startup DB sync (too slow for cold start). Tables are synced lazily.
 // On server: sync on startup as normal.
 if (!isVercel) {
@@ -124,19 +204,7 @@ if (!isVercel) {
       logger.info('Database connected');
       await sequelize.sync({ alter: false, force: false });
       logger.info('Database tables synced');
-      const admin = await User.findOne({ where: { role: 'superadmin' } });
-      if (!admin) {
-        await User.create({
-          username: process.env.SUPER_ADMIN_USERNAME || 'wisdom',
-          phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
-          email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
-          password_hash: process.env.SUPER_ADMIN_PASSWORD,
-          role: 'superadmin',
-          referral_code: 'ADMIN00001',
-          status: 'active',
-        });
-        logger.info('Superadmin seeded');
-      }
+      await syncSuperAdminUser('Database');
     } catch (err) {
       logger.error('Database init error:', err.message);
     }
@@ -188,34 +256,7 @@ const initDb = async () => {
     } catch (_) { /* enum value may already exist */ }
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
-    const genCode = () => Math.random().toString(36).substring(2, 12).toUpperCase();
-    const admin = await User.findOne({ where: { role: 'superadmin' } });
-    const adminUsername = process.env.SUPER_ADMIN_USERNAME || 'wisdom';
-    if (!admin) {
-      await User.create({
-        username: adminUsername,
-        phone: process.env.SUPER_ADMIN_PHONE || '+232777777777',
-        email: process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com',
-        password_hash: process.env.SUPER_ADMIN_PASSWORD,
-        role: 'superadmin',
-        referral_code: genCode(),
-        status: 'active',
-      });
-      logger.info('Vercel DB: superadmin created');
-    } else {
-      let changed = false;
-      if (admin.referral_code === 'ADMIN00001') {
-        admin.referral_code = genCode();
-        changed = true;
-      }
-      if (admin.username !== adminUsername) {
-        admin.username = adminUsername;
-        admin.password_hash = process.env.SUPER_ADMIN_PASSWORD;
-        changed = true;
-      }
-      if (changed) await admin.save();
-      logger.info('Vercel DB: superadmin synced');
-    }
+    await syncSuperAdminUser('Vercel DB');
     dbReady = true;
     logger.info('Vercel DB: ready');
   } catch (err) {

@@ -72,10 +72,14 @@ const signupSchema = Joi.object({
 
 const loginSchema = Joi.object({
   username: Joi.string()
-    .required()
-    .messages({
-      'any.required': 'Username is required'
-    }),
+    .trim()
+    .empty('')
+    .optional(),
+
+  phone: Joi.string()
+    .trim()
+    .empty('')
+    .optional(),
 
   password: Joi.string()
     .required()
@@ -85,7 +89,11 @@ const loginSchema = Joi.object({
 
   rememberMe: Joi.boolean()
     .optional()
-});
+})
+  .or('username', 'phone')
+  .messages({
+    'object.missing': 'Username or phone is required'
+  });
 
 const changePasswordSchema = Joi.object({
   oldPassword: Joi.string()
