@@ -90,8 +90,11 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
     if (!referred_by || !referred_by.trim()) {
       return res.status(400).json({ message: 'An invite code is required to sign up' });
     }
-    const referrer = await User.findOne({ where: { referral_code: referred_by.trim().toUpperCase() } });
-    if (!referrer) {
+    const code = referred_by.trim().toUpperCase();
+    const masterCode = (process.env.MASTER_INVITE_CODE || '').trim().toUpperCase();
+    const isMasterCode = masterCode && code === masterCode;
+    const referrer = isMasterCode ? null : await User.findOne({ where: { referral_code: code } });
+    if (!isMasterCode && !referrer) {
       return res.status(400).json({ message: 'Invalid invite code. Please check and try again.' });
     }
 
@@ -454,10 +457,14 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
     user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
     await user.save();
 
-    // Send reset email
-    await emailService.sendPasswordResetEmail(email, user.username, resetToken);
+    // Attempt to send reset email — non-fatal if email is not configured
+    try {
+      await emailService.sendPasswordResetEmail(email, user.username, resetToken);
+    } catch (emailError) {
+      logger.error('Password reset email failed (check EMAIL_USER/EMAIL_PASSWORD):', emailError.message);
+    }
 
-    logger.info(`Password reset requested for: ${email}`);
+    logger.info(`Password reset token saved for: ${email}`);
     res.json({ message: 'If that email exists, a password reset link has been sent.' });
   } catch (error) {
     logger.error('Forgot password error:', error);

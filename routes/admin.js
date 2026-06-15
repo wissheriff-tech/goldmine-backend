@@ -5,6 +5,7 @@ const bcrypt = require('bcryptjs');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
+const ps = require('../utils/platformSettings');
 
 // Validation and Security Middleware
 const {
@@ -1050,8 +1051,8 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
         result = { txType: 'withdrawal', txId: tx.id };
         logger.info(`Withdrawal ${tx.id} approved by admin ${req.user.username}`);
       } else {
-        // Deposit: credit balance now (with fee)
-        const feePercent = parseFloat(process.env.RECHARGE_FEE_PERCENTAGE || 10);
+        // Deposit: credit balance now — admin enters the raw SLE/NSL from receipt, fee applied here
+        const feePercent = await ps.get('recharge_fee_pct');
         const baseNSL = parseFloat(approved_NSL || tx.amount_NSL);
         const creditNSL = baseNSL * (1 - feePercent / 100);
 
@@ -1118,6 +1119,45 @@ router.patch('/transaction/:id/reject', authenticate, authorize(['superadmin', '
   } catch (error) {
     logger.error('Transaction reject error:', error);
     res.status(error.status || 500).json({ message: error.message || 'Rejection failed' });
+  }
+});
+
+// ── Platform Settings ─────────────────────────────────────────────────────────
+
+router.get('/platform-settings', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
+  try {
+    const settings = await ps.getAll();
+    res.json({ settings });
+  } catch (err) {
+    logger.error('Platform settings fetch error:', err);
+    res.status(500).json({ message: 'Error fetching platform settings' });
+  }
+});
+
+router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
+  try {
+    const allowed = [
+      'referral_l1_pct', 'referral_l2_pct', 'referral_l3_pct',
+      'recharge_fee_pct', 'withdrawal_fee_pct',
+      'dur_short', 'dur_week', 'dur_month', 'dur_promo', 'dur_promo_label',
+    ];
+
+    for (const key of allowed) {
+      if (req.body[key] === undefined) continue;
+      await PaymentSetting.upsert({
+        key,
+        value: String(req.body[key]),
+        updated_by: req.user.id,
+      });
+    }
+
+    ps.invalidate(); // clear cache so next read is fresh
+    const updated = await ps.getAll();
+    logger.info(`Platform settings updated by ${req.user.phone}`);
+    res.json({ message: 'Settings saved', settings: updated });
+  } catch (err) {
+    logger.error('Platform settings save error:', err);
+    res.status(500).json({ message: 'Error saving platform settings' });
   }
 });
 

@@ -21,6 +21,7 @@ const ExchangeRate = require('./ExchangeRate');
 const CurrencyRate = require('./CurrencyRate');
 const DepositProof = require('./DepositProof');
 const PaymentSetting = require('./PaymentSetting');
+const Testimonial = require('./Testimonial');
 
 // ==================== ASSOCIATIONS ====================
 
@@ -96,4 +97,5 @@ module.exports = {
   CurrencyRate,
   DepositProof,
   PaymentSetting,
+  Testimonial,
 };

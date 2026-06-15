@@ -232,8 +232,9 @@ const analyticsRoutes = require('./routes/analytics');
 const batchRoutes = require('./routes/batch');
 const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
-const chatRoutes = require('./routes/chat');
 const depositRoutes = require('./routes/deposit');
+const testimonialsRoutes = require('./routes/testimonials');
+const chatRoutes = require('./routes/chat');
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
@@ -248,12 +249,16 @@ const initDb = async () => {
   try {
     await sequelize.authenticate();
     logger.info('Vercel DB: authenticated');
-    // Add orange_money to payment_method ENUM if not already present
+    // Add enum values and missing columns if not already present
     try {
       await sequelize.query(`ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'orange_money'`);
+      await sequelize.query(`ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'africell'`);
       await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "reference_id" VARCHAR(255)`);
       await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "approved_at" TIMESTAMP WITH TIME ZONE`);
-    } catch (_) { /* enum value may already exist */ }
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "rejected_at" TIMESTAMP WITH TIME ZONE`);
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "admin_notes" TEXT`);
+      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "confirmations" INTEGER DEFAULT 0`);
+    } catch (_) { /* ignore */ }
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
     await syncSuperAdminUser('Vercel DB');
@@ -293,8 +298,9 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/batch', batchRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/security', securityRoutes);
-app.use('/api/chat', chatRoutes);
 app.use('/api/deposit', depositRoutes);
+app.use('/api/testimonials', testimonialsRoutes);
+app.use('/api/chat', chatRoutes);
 app.use('/api/orange-money', require('./routes/orangeMoney'));
 app.use('/api/cron', require('./routes/cron'));
 
@@ -302,7 +308,6 @@ app.use('/api/cron', require('./routes/cron'));
 app.get('/api', (req, res) => {
   res.json({ name: 'SalonMoney API', status: 'running', version: '1.0.0' });
 });
-
 
 // Seed products (admin-only, idempotent)
 app.post('/api/admin/seed-products', authenticate, (req, res, next) => {

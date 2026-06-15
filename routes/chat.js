@@ -502,7 +502,7 @@ router.get('/stats/overview', authenticate, authorizeRoles('admin', 'superadmin'
         resolved_at: { [Op.ne]: null }
       },
       attributes: [
-        [fn('AVG', literal('TIMESTAMPDIFF(SECOND, created_at, resolved_at) * 1000')), 'avgTime']
+        [fn('AVG', literal('EXTRACT(EPOCH FROM (resolved_at - created_at)) * 1000')), 'avgTime']
       ],
       raw: true
     });

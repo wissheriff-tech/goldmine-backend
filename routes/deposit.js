@@ -10,6 +10,7 @@ const { assertImageMagicBytes } = require('../middleware/upload');
 const { DepositProof, User, Transaction, PaymentSetting, sequelize } = require('../models');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
+const ps = require('../utils/platformSettings');
 const { put: blobPut } = require('@vercel/blob');
 const isVercel = process.env.VERCEL === '1';
 
@@ -245,7 +246,7 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
 
       const amount = parseFloat(approved_amount || proof.user_submitted_amount);
       const nslRate = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
-      const feePercent = parseFloat(process.env.RECHARGE_FEE_PERCENTAGE || 10);
+      const feePercent = await ps.get('recharge_fee_pct');
       const amountAfterFee = amount * (1 - feePercent / 100);
       const nslAmount = amountAfterFee * nslRate;
 
