@@ -54,9 +54,14 @@ async function payReferralCommissions(depositor, amountNSL) {
 }
 
 // Public: NSL/USDT exchange rate
-router.get('/nsl-rate', (req, res) => {
-  const nslPerUsdt = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 25);
-  res.json({ nsl_per_usdt: nslPerUsdt });
+router.get('/nsl-rate', async (req, res) => {
+  try {
+    const nslPerUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    res.json({ nsl_per_usdt: nslPerUsdt, usdt_per_nsl: parseFloat((1 / nslPerUsdt).toFixed(6)) });
+  } catch (error) {
+    logger.error('NSL rate fetch error:', error);
+    res.status(500).json({ message: 'Error fetching exchange rate' });
+  }
 });
 
 // Finance: Get pending transactions

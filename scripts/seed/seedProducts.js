@@ -92,7 +92,7 @@ async function seedProducts() {
     await Product.sync();
     console.log('Starting product seeding...\n');
 
-    const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
+    const nslToUsdt = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23.99);
     let created = 0;
     let updated = 0;
 

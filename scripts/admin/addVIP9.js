@@ -12,7 +12,7 @@ async function addVIP9() {
     console.log('Adding VIP9 - Ultimate Elite Package...\n');
 
     // Get NSL to USDT conversion rate
-    const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
+    const nslToUsdt = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23.99);
 
     // VIP9 Product Definition - Ultimate Elite Package
     const vip9Data = {

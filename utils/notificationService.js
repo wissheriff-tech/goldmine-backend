@@ -154,6 +154,92 @@ class NotificationService {
     );
   }
 
+  // General account update notification
+  async notifyAccountUpdated(userId, title, message, options = {}) {
+    return this.create(
+      userId,
+      options.type || 'account_updated',
+      title,
+      message,
+      {
+        priority: options.priority || 'medium',
+        icon: options.icon || 'account_circle',
+        action_url: options.action_url || '/account',
+        data: options.data || {}
+      }
+    );
+  }
+
+  // Balance adjusted by admin
+  async notifyBalanceAdjusted(userId, action, amount, currency, newBalance, reason) {
+    const verb = action === 'deduct' ? 'deducted from' : 'added to';
+    const amountLabel = `${Number(amount).toLocaleString()} ${currency}`;
+
+    return this.create(
+      userId,
+      'balance_adjusted',
+      action === 'deduct' ? 'Money Deducted' : 'Money Added',
+      `${amountLabel} was ${verb} your account. New ${currency} balance: ${Number(newBalance).toLocaleString()}.${reason ? ` Reason: ${reason}` : ''}`,
+      {
+        priority: 'high',
+        icon: 'payments',
+        action_url: '/wallet',
+        data: { action, amount, currency, new_balance: newBalance, reason: reason || null }
+      }
+    );
+  }
+
+  // Phone changed by admin
+  async notifyPhoneChanged(userId, phone) {
+    return this.create(
+      userId,
+      'phone_changed',
+      'Phone Number Updated',
+      `The phone number on your account was changed to ${phone}.`,
+      {
+        priority: 'high',
+        icon: 'phone',
+        action_url: '/account/settings',
+        data: { phone }
+      }
+    );
+  }
+
+  // Password changed by account owner
+  async notifyPasswordChanged(userId) {
+    return this.create(
+      userId,
+      'password_changed',
+      'Password Changed',
+      'Your password was changed successfully. If this was not you, contact support immediately.',
+      {
+        priority: 'urgent',
+        icon: 'lock',
+        action_url: '/account/security'
+      }
+    );
+  }
+
+  // Password reset through recovery or by admin
+  async notifyPasswordReset(userId, performedBy = 'system') {
+    const message = performedBy === 'admin'
+      ? 'Your password was reset by an administrator. If you did not request this, contact support immediately.'
+      : 'Your password was reset successfully. If this was not you, contact support immediately.';
+
+    return this.create(
+      userId,
+      'password_reset',
+      'Password Reset',
+      message,
+      {
+        priority: 'urgent',
+        icon: 'lock_reset',
+        action_url: '/account/security',
+        data: { performed_by: performedBy }
+      }
+    );
+  }
+
   // KYC verified notification
   async notifyKYCVerified(userId) {
     return this.create(
@@ -164,7 +250,22 @@ class NotificationService {
       {
         priority: 'high',
         icon: 'verified',
-        action_url: '/profile'
+        action_url: '/account/kyc'
+      }
+    );
+  }
+
+  async notifyKYCRejected(userId, reason) {
+    return this.create(
+      userId,
+      'kyc_rejected',
+      'KYC Verification Rejected',
+      `Your KYC verification was rejected.${reason ? ` Reason: ${reason}` : ''}`,
+      {
+        priority: 'high',
+        icon: 'cancel',
+        action_url: '/account/kyc',
+        data: { reason: reason || null }
       }
     );
   }
@@ -183,6 +284,22 @@ class NotificationService {
     );
   }
 
+  // Targeted admin message
+  async notifyAdminMessage(userId, title, message, options = {}) {
+    return this.create(
+      userId,
+      'admin_message',
+      title,
+      message,
+      {
+        priority: options.priority || 'high',
+        icon: 'campaign',
+        action_url: options.action_url || null,
+        data: options.data || {}
+      }
+    );
+  }
+
   // Security alert
   async notifySecurityAlert(userId, message) {
     return this.create(
@@ -193,7 +310,7 @@ class NotificationService {
       {
         priority: 'urgent',
         icon: 'lock',
-        action_url: '/settings/security'
+        action_url: '/account/security'
       }
     );
   }
@@ -289,9 +406,13 @@ class NotificationService {
       });
 
       const total = await Notification.count({ where: filter });
+      const unreadCount = await Notification.count({
+        where: { user_id: userId, read: false }
+      });
 
       return {
         notifications,
+        unread_count: unreadCount,
         pagination: {
           total,
           limit: parseInt(limit),

@@ -20,12 +20,28 @@ const {
 } = require('../middleware/security');
 
 const router = express.Router();
+const INVITATION_DURATION_KEYS = new Set(['month', 'promo']);
+
+const productWithRate = (product, nslPerUsdt) => {
+  const data = product.toJSON ? product.toJSON() : { ...product };
+  data.price_usdt = parseFloat((parseFloat(data.price_NSL || 0) / nslPerUsdt).toFixed(2));
+  data.exchange_rate_nsl_per_usdt = nslPerUsdt;
+  return data;
+};
+
+const buildDurationOptions = (settings) => ([
+  { key: 'short', label: `${settings.dur_short} Days`, days: settings.dur_short, group: 'default', requires_invitation: false },
+  { key: 'week', label: '1 Week', days: settings.dur_week, group: 'default', requires_invitation: false },
+  { key: 'month', label: '1 Month', days: settings.dur_month, group: 'invitation', requires_invitation: true },
+  { key: 'promo', label: settings.dur_promo_label, days: settings.dur_promo, group: 'invitation', requires_invitation: true },
+]);
 
 // Get all products
 router.get('/', async (req, res) => {
   try {
+    const nslPerUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
     const products = await Product.findAll({ where: { active: true } });
-    res.json(products);
+    res.json(products.map(product => productWithRate(product, nslPerUsdt)));
   } catch (error) {
     logger.error('Products fetch error:', error);
     res.status(500).json({ message: 'Error fetching products', error: error.message });
@@ -37,12 +53,7 @@ router.get('/durations', async (req, res) => {
   try {
     const s = await ps.getAll();
     res.json({
-      options: [
-        { key: 'short', label: `${s.dur_short} Days`,  days: s.dur_short  },
-        { key: 'week',  label: '1 Week',                days: s.dur_week   },
-        { key: 'month', label: '1 Month',               days: s.dur_month  },
-        { key: 'promo', label: s.dur_promo_label,       days: s.dur_promo  },
-      ],
+      options: buildDurationOptions(s),
       referral: {
         l1_pct: s.referral_l1_pct,
         l2_pct: s.referral_l2_pct,
@@ -107,13 +118,18 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
 
     // Use user-selected duration, fall back to product default
     const validDuration = duration_key && durationMap[duration_key];
-    const chosenDays = validDuration ? durationMap[duration_key] : product.validity_days;
+    const requestedDurationKey = validDuration ? duration_key : null;
+    const chosenDays = requestedDurationKey ? durationMap[requestedDurationKey] : product.validity_days;
 
     let purchaseResult;
 
     await sequelize.transaction(async (t) => {
       const user = await User.findOne({ where: { id: req.user.id }, lock: t.LOCK.UPDATE, transaction: t });
       if (!user) throw Object.assign(new Error('User not found'), { status: 404 });
+      const hasInvitationAccess = Boolean(user.referred_by) || ['admin', 'superadmin', 'ambassador'].includes(user.role);
+      if (INVITATION_DURATION_KEYS.has(requestedDurationKey) && !hasInvitationAccess) {
+        throw Object.assign(new Error('This duration is invitation-only. Use the 3 days or 1 week option, or join through an invitation.'), { status: 403 });
+      }
       if (user.balance_NSL < product.price_NSL) throw Object.assign(new Error('Insufficient balance'), { status: 400 });
 
       const existingProduct = await UserProduct.findOne({
@@ -145,7 +161,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
       await user.save({ transaction: t });
 
       await Transaction.create({
-        user_id: user.id, type: 'purchase', amount_NSL: product.price_NSL, amount_usdt: product.price_usdt,
+        user_id: user.id, type: 'purchase', amount_NSL: product.price_NSL, amount_usdt: parseFloat((product.price_NSL / (s.exchange_rate_nsl_per_usdt || 23.99)).toFixed(2)),
         product_id: product.id, status: 'approved',
         notes: `Purchased ${product.name} (${chosenDays} days) — expires ${expiresAt.toLocaleDateString()}`,
       }, { transaction: t });
@@ -180,7 +196,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
 router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateCreateProduct, async (req, res) => {
   try {
     const { name, price_NSL, daily_income_NSL, validity_days, description, benefits } = req.body;
-    const NSL_RATE = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
+    const NSL_RATE = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
     const price_usdt = req.body.price_usdt != null
       ? parseFloat(req.body.price_usdt)
       : parseFloat((price_NSL / NSL_RATE).toFixed(2));
@@ -218,7 +234,7 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
 router.patch('/:id', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateUpdateProduct, async (req, res) => {
   try {
     const { price_NSL, daily_income_NSL, validity_days, active, description, benefits } = req.body;
-    const NSL_RATE = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
+    const NSL_RATE = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
     const price_usdt = req.body.price_usdt != null
       ? parseFloat(req.body.price_usdt)
       : (price_NSL != null ? parseFloat((price_NSL / NSL_RATE).toFixed(2)) : undefined);

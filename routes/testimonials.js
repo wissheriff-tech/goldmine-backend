@@ -5,59 +5,181 @@ const { adminLimiter } = require('../middleware/security');
 
 const router = express.Router();
 
-const SEED = [
-  // Sierra Leone
-  { name: 'Mohamed Bangura', country: 'Sierra Leone', flag: '🇸🇱', phone: '+232 76 234567', type: 'withdrawal', amount_nsl: 3200 },
-  { name: 'Fatmata Kamara',  country: 'Sierra Leone', flag: '🇸🇱', phone: '+232 78 345678', type: 'earning',    amount_nsl: 480  },
-  { name: 'Ibrahim Koroma',  country: 'Sierra Leone', flag: '🇸🇱', phone: '+232 77 456789', type: 'deposit',    amount_nsl: 1150 },
-  { name: 'Aminata Sesay',   country: 'Sierra Leone', flag: '🇸🇱', phone: '+232 76 567890', type: 'withdrawal', amount_nsl: 2750 },
-  { name: 'Abdul Conteh',    country: 'Sierra Leone', flag: '🇸🇱', phone: '+232 78 678901', type: 'earning',    amount_nsl: 620  },
-  // Liberia
-  { name: 'Emmanuel Kollie', country: 'Liberia', flag: '🇱🇷', phone: '+231 77 123456', type: 'withdrawal', amount_nsl: 4100 },
-  { name: 'Comfort Toe',     country: 'Liberia', flag: '🇱🇷', phone: '+231 88 234567', type: 'earning',    amount_nsl: 390  },
-  { name: 'Varney Konneh',   country: 'Liberia', flag: '🇱🇷', phone: '+231 77 345678', type: 'deposit',    amount_nsl: 2000 },
-  { name: 'Nowai Flomo',     country: 'Liberia', flag: '🇱🇷', phone: '+231 88 456789', type: 'withdrawal', amount_nsl: 1800 },
-  { name: 'Thomas Nimba',    country: 'Liberia', flag: '🇱🇷', phone: '+231 77 567890', type: 'earning',    amount_nsl: 550  },
-  // Senegal
-  { name: 'Moussa Diallo',   country: 'Senegal', flag: '🇸🇳', phone: '+221 77 123 456', type: 'withdrawal', amount_nsl: 5200 },
-  { name: 'Aissatou Ndiaye', country: 'Senegal', flag: '🇸🇳', phone: '+221 78 234 567', type: 'earning',    amount_nsl: 720  },
-  { name: 'Ibrahima Sow',    country: 'Senegal', flag: '🇸🇳', phone: '+221 76 345 678', type: 'deposit',    amount_nsl: 3000 },
-  { name: 'Khady Fall',      country: 'Senegal', flag: '🇸🇳', phone: '+221 70 456 789', type: 'withdrawal', amount_nsl: 2400 },
-  { name: 'Ousmane Badji',   country: 'Senegal', flag: '🇸🇳', phone: '+221 77 567 890', type: 'earning',    amount_nsl: 890  },
-  // Togo
-  { name: 'Kofi Mensah',     country: 'Togo', flag: '🇹🇬', phone: '+228 90 12 34 56', type: 'withdrawal', amount_nsl: 2900 },
-  { name: 'Ama Abalo',       country: 'Togo', flag: '🇹🇬', phone: '+228 91 23 45 67', type: 'earning',    amount_nsl: 410  },
-  { name: 'Edem Agbeko',     country: 'Togo', flag: '🇹🇬', phone: '+228 90 34 56 78', type: 'deposit',    amount_nsl: 1600 },
-  { name: 'Akosua Dossou',   country: 'Togo', flag: '🇹🇬', phone: '+228 99 45 67 89', type: 'withdrawal', amount_nsl: 3500 },
-  { name: 'Yao Kpakpo',      country: 'Togo', flag: '🇹🇬', phone: '+228 90 56 78 90', type: 'earning',    amount_nsl: 670  },
-  // Nigeria
-  { name: 'Chukwuemeka Obi',   country: 'Nigeria', flag: '🇳🇬', phone: '+234 803 123 4567', type: 'withdrawal', amount_nsl: 6800 },
-  { name: 'Ngozi Okafor',      country: 'Nigeria', flag: '🇳🇬', phone: '+234 806 234 5678', type: 'earning',    amount_nsl: 940  },
-  { name: 'Babatunde Adeyemi', country: 'Nigeria', flag: '🇳🇬', phone: '+234 815 345 6789', type: 'deposit',    amount_nsl: 4500 },
-  { name: 'Chidinma Eze',      country: 'Nigeria', flag: '🇳🇬', phone: '+234 701 456 7890', type: 'withdrawal', amount_nsl: 3100 },
-  { name: 'Emeka Nwosu',       country: 'Nigeria', flag: '🇳🇬', phone: '+234 810 567 8901', type: 'earning',    amount_nsl: 1200 },
+const MIN_SEEDED_PER_COUNTRY = 100;
+const ACTIVITY_TYPES = ['withdrawal', 'earning', 'deposit', 'withdrawal', 'earning', 'deposit'];
+
+const COUNTRY_CONFIG = [
+  {
+    country: 'Sierra Leone',
+    flag: '🇸🇱',
+    currency_code: 'NSL',
+    currency_symbol: 'NSL',
+    currency_name: 'NSL credit',
+    phonePrefix: '+232',
+    mobilePrefixes: ['76', '77', '78', '79', '30', '33'],
+    firstNames: ['Mohamed', 'Fatmata', 'Ibrahim', 'Aminata', 'Abdul', 'Kadiatu', 'Alhaji', 'Mariama', 'Sorie', 'Hawa'],
+    lastNames: ['Bangura', 'Kamara', 'Koroma', 'Sesay', 'Conteh', 'Kargbo', 'Mansaray', 'Turay', 'Jalloh', 'Sankoh'],
+    ranges: { withdrawal: [1800, 9500], deposit: [1000, 7000], earning: [350, 1800] },
+  },
+  {
+    country: 'Liberia',
+    flag: '🇱🇷',
+    currency_code: 'LRD',
+    currency_symbol: 'L$',
+    currency_name: 'Liberian dollar',
+    phonePrefix: '+231',
+    mobilePrefixes: ['77', '88', '55', '99'],
+    firstNames: ['Emmanuel', 'Comfort', 'Varney', 'Nowai', 'Thomas', 'Miatta', 'Joseph', 'Patience', 'Saye', 'Mamie'],
+    lastNames: ['Kollie', 'Toe', 'Konneh', 'Flomo', 'Nimba', 'Johnson', 'Wesseh', 'Bility', 'Sherman', 'Dolo'],
+    ranges: { withdrawal: [25000, 180000], deposit: [15000, 120000], earning: [2500, 18000] },
+  },
+  {
+    country: 'Togo',
+    flag: '🇹🇬',
+    currency_code: 'XOF',
+    currency_symbol: 'CFA',
+    currency_name: 'West African CFA franc',
+    phonePrefix: '+228',
+    mobilePrefixes: ['90', '91', '92', '93', '97', '99'],
+    firstNames: ['Kofi', 'Ama', 'Edem', 'Akosua', 'Yao', 'Afi', 'Komlan', 'Abla', 'Kodjo', 'Essi'],
+    lastNames: ['Mensah', 'Abalo', 'Agbeko', 'Dossou', 'Kpakpo', 'Adjovi', 'Togbe', 'Amegah', 'Sossou', 'Akakpo'],
+    ranges: { withdrawal: [35000, 420000], deposit: [25000, 300000], earning: [5000, 45000] },
+  },
+  {
+    country: 'Guinea',
+    flag: '🇬🇳',
+    currency_code: 'GNF',
+    currency_symbol: 'FG',
+    currency_name: 'Guinean franc',
+    phonePrefix: '+224',
+    mobilePrefixes: ['620', '622', '624', '626', '628', '664'],
+    firstNames: ['Mamadou', 'Aminata', 'Ibrahima', 'Fatoumata', 'Alpha', 'Binta', 'Ousmane', 'Mariama', 'Abdoulaye', 'Kadiatou'],
+    lastNames: ['Diallo', 'Bah', 'Camara', 'Sow', 'Barry', 'Keita', 'Conte', 'Sylla', 'Toure', 'Kaba'],
+    ranges: { withdrawal: [350000, 3500000], deposit: [250000, 2500000], earning: [60000, 420000] },
+  },
+  {
+    country: 'Nigeria',
+    flag: '🇳🇬',
+    currency_code: 'NGN',
+    currency_symbol: '₦',
+    currency_name: 'Nigerian naira',
+    phonePrefix: '+234',
+    mobilePrefixes: ['803', '806', '815', '701', '810', '905', '907', '913'],
+    firstNames: ['Chukwuemeka', 'Ngozi', 'Babatunde', 'Chidinma', 'Emeka', 'Aisha', 'Ifeanyi', 'Zainab', 'Olumide', 'Adaeze'],
+    lastNames: ['Obi', 'Okafor', 'Adeyemi', 'Eze', 'Nwosu', 'Bello', 'Okoro', 'Musa', 'Adebayo', 'Ibrahim'],
+    ranges: { withdrawal: [45000, 650000], deposit: [30000, 450000], earning: [8000, 85000] },
+  },
+  {
+    country: 'Senegal',
+    flag: '🇸🇳',
+    currency_code: 'XOF',
+    currency_symbol: 'CFA',
+    currency_name: 'West African CFA franc',
+    phonePrefix: '+221',
+    mobilePrefixes: ['70', '76', '77', '78'],
+    firstNames: ['Moussa', 'Aissatou', 'Ibrahima', 'Khady', 'Ousmane', 'Fatou', 'Cheikh', 'Aminata', 'Mamadou', 'Ndeye'],
+    lastNames: ['Diallo', 'Ndiaye', 'Sow', 'Fall', 'Badji', 'Diop', 'Ba', 'Sarr', 'Gueye', 'Faye'],
+    ranges: { withdrawal: [40000, 480000], deposit: [25000, 320000], earning: [7000, 50000] },
+  },
 ];
 
-// Seed on first boot if table is empty
-async function seedIfEmpty() {
+const COUNTRY_BY_NAME = new Map(COUNTRY_CONFIG.map(config => [config.country.toLowerCase(), config]));
+const COUNTRY_OPTIONS = COUNTRY_CONFIG.map(({ country, flag, currency_code, currency_symbol, currency_name }) => ({
+  country,
+  flag,
+  currency_code,
+  currency_symbol,
+  currency_name,
+}));
+
+const getCountryConfig = (country) => COUNTRY_BY_NAME.get(String(country || '').trim().toLowerCase()) || null;
+
+const formatPhone = (config, index) => {
+  const prefix = config.mobilePrefixes[index % config.mobilePrefixes.length];
+  const seed = String(1000000 + ((index * 7919 + 234567) % 9000000));
+  if (config.country === 'Nigeria') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 3)} ${seed.slice(3)}`;
+  if (config.country === 'Togo') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 2)} ${seed.slice(2, 4)} ${seed.slice(4, 6)}`;
+  if (config.country === 'Senegal') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 3)} ${seed.slice(3, 6)}`;
+  if (config.country === 'Guinea') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 2)} ${seed.slice(2, 4)} ${seed.slice(4, 6)}`;
+  return `${config.phonePrefix} ${prefix} ${seed.slice(0, 6)}`;
+};
+
+const amountFor = (config, type, index) => {
+  const [min, max] = config.ranges[type];
+  const raw = min + ((index * 6151 + type.charCodeAt(0) * 977) % (max - min + 1));
+  const roundTo = max > 1000000 ? 5000 : max > 100000 ? 1000 : max > 10000 ? 500 : 10;
+  return Math.round(raw / roundTo) * roundTo;
+};
+
+const buildSeedForCountry = (config, startIndex, count) => {
+  return Array.from({ length: count }, (_, offset) => {
+    const index = startIndex + offset;
+    const type = ACTIVITY_TYPES[index % ACTIVITY_TYPES.length];
+    const first = config.firstNames[index % config.firstNames.length];
+    const last = config.lastNames[Math.floor(index / config.firstNames.length) % config.lastNames.length];
+    return {
+      name: `${first} ${last}`,
+      country: config.country,
+      flag: config.flag,
+      phone: formatPhone(config, index),
+      type,
+      amount_nsl: amountFor(config, type, index),
+    };
+  });
+};
+
+const formatLocalAmount = (amount, config) => {
+  const numeric = Number(amount) || 0;
+  const value = numeric.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  if (!config) return `${value} NSL`;
+  if (config.currency_symbol === config.currency_code) return `${value} ${config.currency_code}`;
+  const prefix = ['L$', '₦'].includes(config.currency_symbol)
+    ? config.currency_symbol
+    : `${config.currency_symbol} `;
+  return `${prefix}${value} ${config.currency_code}`;
+};
+
+const decorateTestimonial = (row) => {
+  const plain = typeof row?.toJSON === 'function' ? row.toJSON() : row;
+  const config = getCountryConfig(plain.country);
+  const amount = Number(plain.amount_nsl) || 0;
+  return {
+    ...plain,
+    flag: plain.flag || config?.flag || '',
+    currency_code: config?.currency_code || 'NSL',
+    currency_symbol: config?.currency_symbol || 'NSL',
+    currency_name: config?.currency_name || 'SalonMoney credit',
+    amount_local: amount,
+    amount_display: formatLocalAmount(amount, config),
+  };
+};
+
+async function seedIfNeeded() {
   try {
     await Testimonial.sync({ alter: false });
-    const count = await Testimonial.count();
-    if (count === 0) {
-      await Testimonial.bulkCreate(SEED);
+    for (const config of COUNTRY_CONFIG) {
+      const count = await Testimonial.count({ where: { country: config.country } });
+      const missing = Math.max(0, MIN_SEEDED_PER_COUNTRY - count);
+      if (missing > 0) {
+        await Testimonial.bulkCreate(buildSeedForCountry(config, count, missing));
+      }
     }
   } catch {}
 }
-seedIfEmpty();
+seedIfNeeded();
 
 // Public: visible testimonials for user dashboard feed
 router.get('/', async (req, res) => {
   try {
+    const countryConfig = getCountryConfig(req.query.country);
+    const where = { visible: true };
+    if (countryConfig) where.country = countryConfig.country;
     const rows = await Testimonial.findAll({
-      where: { visible: true },
+      where,
       order: [['id', 'ASC']],
     });
-    res.json({ testimonials: rows });
+    const testimonials = rows.map(decorateTestimonial).sort(() => Math.random() - 0.5);
+    res.json({ testimonials, countries: COUNTRY_OPTIONS });
   } catch (err) {
     res.status(500).json({ message: 'Error fetching testimonials', error: err.message });
   }
@@ -67,7 +189,7 @@ router.get('/', async (req, res) => {
 router.get('/all', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
     const rows = await Testimonial.findAll({ order: [['id', 'ASC']] });
-    res.json({ testimonials: rows });
+    res.json({ testimonials: rows.map(decorateTestimonial), countries: COUNTRY_OPTIONS });
   } catch (err) {
     res.status(500).json({ message: 'Error fetching testimonials', error: err.message });
   }
@@ -80,7 +202,7 @@ router.patch('/:id/toggle', authenticate, authorize(['superadmin']), adminLimite
     if (!t) return res.status(404).json({ message: 'Not found' });
     t.visible = !t.visible;
     await t.save();
-    res.json({ testimonial: t });
+    res.json({ testimonial: decorateTestimonial(t) });
   } catch (err) {
     res.status(500).json({ message: 'Error toggling testimonial', error: err.message });
   }
@@ -103,10 +225,21 @@ router.post('/', authenticate, authorize(['superadmin']), adminLimiter, async (r
   try {
     const { name, country, flag, phone, type, amount_nsl } = req.body;
     if (!name || !country || !phone || !type || !amount_nsl) {
-      return res.status(400).json({ message: 'name, country, phone, type, amount_nsl required' });
+      return res.status(400).json({ message: 'Name, country, phone, type, and amount are required' });
     }
-    const t = await Testimonial.create({ name, country, flag: flag || '', phone, type, amount_nsl });
-    res.status(201).json({ testimonial: t });
+    const countryConfig = getCountryConfig(country);
+    if (!countryConfig) return res.status(400).json({ message: 'Unsupported country' });
+    const amount = Number(amount_nsl);
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: 'Amount must be positive' });
+    const t = await Testimonial.create({
+      name: String(name).trim(),
+      country: countryConfig.country,
+      flag: flag || countryConfig.flag,
+      phone: String(phone).trim(),
+      type,
+      amount_nsl: amount,
+    });
+    res.status(201).json({ testimonial: decorateTestimonial(t), countries: COUNTRY_OPTIONS });
   } catch (err) {
     res.status(500).json({ message: 'Error creating testimonial', error: err.message });
   }

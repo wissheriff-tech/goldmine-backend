@@ -5,9 +5,9 @@ const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
+const ps = require('../utils/platformSettings');
 
 const router = express.Router();
-const NSL_RATE = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
 
 // ── Auth ──────────────────────────────────────────────────────────────────
 // Vercel injects Authorization: Bearer <CRON_SECRET> on every cron invocation
@@ -38,6 +38,7 @@ async function recalcVipLevel(userId, t) {
 // ── Job: Daily Income ─────────────────────────────────────────────────────
 async function runDailyIncome() {
   const now = new Date();
+  const nslRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
   const todayEnd   = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
 
@@ -70,7 +71,7 @@ async function runDailyIncome() {
       user_id: up.user_id,
       type: 'income',
       amount_NSL: income,
-      amount_usdt: parseFloat((income / NSL_RATE).toFixed(4)),
+      amount_usdt: parseFloat((income / nslRate).toFixed(4)),
       product_id: up.product_id,
       status: 'approved',
       notes: `Daily income from ${up.product.name}`,
@@ -142,7 +143,7 @@ async function runAutoRenewal() {
             user_id: user.id,
             type: 'renewal',
             amount_NSL: product.price_NSL,
-            amount_usdt: product.price_usdt,
+            amount_usdt: parseFloat((product.price_NSL / nslRate).toFixed(2)),
             product_id: product.id,
             status: 'approved',
             notes: `Auto-renewal of ${product.name} — valid until ${newExpiry.toLocaleDateString()}`,

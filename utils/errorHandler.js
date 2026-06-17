@@ -91,20 +91,20 @@ const errorHandler = (err, req, res, next) => {
     stack: err.stack
   });
 
-  // Mongoose validation error
+  // ORM validation error
   if (err.name === 'ValidationError') {
     const message = Object.values(err.errors).map(e => e.message).join(', ');
     error = new ValidationError(message);
   }
 
-  // Mongoose duplicate key error
+  // Duplicate key error
   if (err.code === 11000) {
     const field = Object.keys(err.keyValue)[0];
     const message = `${field} already exists`;
     error = new ConflictError(message);
   }
 
-  // Mongoose bad ObjectId
+  // Invalid model ID format
   if (err.name === 'CastError') {
     const message = 'Invalid ID format';
     error = new ValidationError(message);

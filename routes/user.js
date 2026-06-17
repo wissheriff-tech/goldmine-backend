@@ -57,6 +57,8 @@ router.get('/dashboard', authenticate, async (req, res) => {
         vip_level: user.vip_level,
         referral_code: user.referral_code,
         referred_by: user.referred_by,
+        ambassador_region: user.ambassador_region,
+        ambassador_sector: user.ambassador_sector,
         status: user.status,
         kyc_verified: user.kyc_verified,
         created_at: user.created_at,
@@ -131,7 +133,7 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
     }
 
     // Calculate amount_usdt as a number, not string
-    const conversionRate = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
+    const conversionRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
     const amount_usdt = parseFloat((amountNSL / conversionRate).toFixed(2));
 
     const transaction = await Transaction.create({
@@ -197,7 +199,8 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
       netAmount = amount_NSL - withdrawalFee;
     }
 
-    const amount_usdt = (netAmount / parseInt(process.env.USDT_TO_NSL_WITHDRAWAL || 25)).toFixed(2);
+    const conversionRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    const amount_usdt = (netAmount / conversionRate).toFixed(2);
 
     res.json({
       requested_amount_NSL: amount_NSL,
@@ -209,7 +212,7 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
       },
       net_amount_NSL: netAmount.toFixed(2),
       net_amount_usdt: amount_usdt,
-      conversion_rate: `1 NSL = ${(1 / parseInt(process.env.USDT_TO_NSL_WITHDRAWAL || 25)).toFixed(4)} USDT`
+      conversion_rate: `1 USDT = ${conversionRate.toFixed(2)} NSL`
     });
   } catch (error) {
     logger.error('Fee calculation error:', error);
@@ -261,7 +264,8 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
         throw e;
       }
 
-      const amount_usdt = (netAmount / parseInt(process.env.USDT_TO_NSL_WITHDRAWAL || 25)).toFixed(2);
+      const conversionRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+      const amount_usdt = (netAmount / conversionRate).toFixed(2);
 
       // Deduct balance atomically — prevents double-spend if two requests race
       user.balance_NSL = parseFloat(user.balance_NSL) - amount_NSL;

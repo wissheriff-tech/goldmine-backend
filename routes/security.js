@@ -354,11 +354,11 @@ router.post('/change-password', authenticate, async (req, res) => {
       { where: { user_id: user.id, is_active: true } }
     );
 
-    // Send security notification
-    await notificationService.notifySecurityAlert(
-      user.id,
-      'Your password was changed successfully. All active sessions have been terminated.'
-    );
+    try {
+      await notificationService.notifyPasswordChanged(user.id);
+    } catch (notifyError) {
+      logger.error('Password change notification error:', notifyError);
+    }
 
     logger.info(`Password changed for user ${user.phone || user.id}`);
 

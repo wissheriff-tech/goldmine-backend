@@ -245,7 +245,7 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
       }
 
       const amount = parseFloat(approved_amount || proof.user_submitted_amount);
-      const nslRate = parseFloat(process.env.NSL_TO_USDT_RECHARGE || 23);
+      const nslRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
       const feePercent = await ps.get('recharge_fee_pct');
       const amountAfterFee = amount * (1 - feePercent / 100);
       const nslAmount = amountAfterFee * nslRate;

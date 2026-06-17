@@ -6,6 +6,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const ps = require('../utils/platformSettings');
+const notificationService = require('../utils/notificationService');
 
 // Validation and Security Middleware
 const {
@@ -14,13 +15,29 @@ const {
   validateUpdateRole,
   validateUpdateStatus,
   validateUpdateVIP,
-  validateResetPassword
+  validateAdminResetPassword
 } = require('../middleware/validation');
 
 // --- MODIFIED: Added resetLimitsForIP to imports ---
 const { adminLimiter, resetLimitsForIP } = require('../middleware/security');
 
 const router = express.Router();
+
+const priceUsdtForNsl = (priceNSL, rate) => (parseFloat(priceNSL || 0) / rate).toFixed(2);
+const productWithRate = (product, rate) => {
+  const data = product.toJSON ? product.toJSON() : { ...product };
+  data.price_usdt = parseFloat(priceUsdtForNsl(data.price_NSL, rate));
+  data.exchange_rate_nsl_per_usdt = rate;
+  return data;
+};
+
+const sendAccountNotification = async (description, task) => {
+  try {
+    await task();
+  } catch (error) {
+    logger.error(`${description} notification error:`, error);
+  }
+};
 
 // Admin: Get all users
 router.get('/users', authenticate, authorize(['superadmin']), async (req, res) => {
@@ -95,15 +112,19 @@ router.get('/users/:id', authenticate, authorize(['superadmin']), async (req, re
 // Admin: Assign role
 router.patch('/users/:id/role', authenticate, authorize(['superadmin']), adminLimiter, validateUpdateRole, async (req, res) => {
   try {
-    const { role } = req.body;
-    const validRoles = ['user', 'admin', 'finance', 'verificator', 'approval', 'superadmin'];
+    const { role, ambassador_region, ambassador_sector } = req.body;
+    const validRoles = ['user', 'admin', 'finance', 'verificator', 'approval', 'superadmin', 'ambassador'];
 
     if (!validRoles.includes(role)) {
       return res.status(400).json({ message: 'Invalid role' });
     }
 
     const [affectedRows] = await User.update(
-      { role },
+      {
+        role,
+        ambassador_region: role === 'ambassador' ? (ambassador_region || null) : null,
+        ambassador_sector: role === 'ambassador' ? (ambassador_sector || null) : null
+      },
       { where: { id: req.params.id } }
     );
 
@@ -116,6 +137,15 @@ router.patch('/users/:id/role', authenticate, authorize(['superadmin']), adminLi
     });
 
     logger.info(`User role updated: ${user.phone} - ${role}`);
+
+    await sendAccountNotification('Role update', () => notificationService.notifyAccountUpdated(
+      user.id,
+      'Account Role Updated',
+      role === 'ambassador'
+        ? `Your account role was updated to ambassador for ${ambassador_sector || 'your sector'} in ${ambassador_region || 'your region'}.`
+        : `Your account role was updated to ${role}.`,
+      { priority: 'high', data: { role, ambassador_region, ambassador_sector, updated_by: req.user.id } }
+    ));
 
     res.json({
       message: 'User role updated',
@@ -152,6 +182,25 @@ router.patch('/users/:id/status', authenticate, authorize(['superadmin']), admin
 
     logger.info(`User status updated: ${user.phone} - ${status}`);
 
+    if (status === 'active') {
+      await sendAccountNotification('Status update', () => notificationService.notifyAccountApproved(user.id));
+    } else if (status === 'frozen') {
+      await sendAccountNotification('Status update', () => notificationService.create(
+        user.id,
+        'account_suspended',
+        'Account Suspended',
+        'Your account was suspended by an administrator. Please contact support for details.',
+        { priority: 'urgent', icon: 'block', action_url: '/account' }
+      ));
+    } else {
+      await sendAccountNotification('Status update', () => notificationService.notifyAccountUpdated(
+        user.id,
+        'Account Status Updated',
+        'Your account status was changed to pending review.',
+        { priority: 'high', data: { status, updated_by: req.user.id } }
+      ));
+    }
+
     res.json({
       message: 'User status updated',
       user
@@ -162,43 +211,96 @@ router.patch('/users/:id/status', authenticate, authorize(['superadmin']), admin
   }
 });
 
-// Admin: Adjust balance
-router.patch('/users/:id/balance', authenticate, authorize(['superadmin']), adminLimiter, validateUpdateBalance, async (req, res) => {
+// Admin: Add or deduct user balance with audit trail
+router.patch('/users/:id/balance', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateUpdateBalance, async (req, res) => {
   try {
-    const { balance_NSL, balance_usdt, reason } = req.body;
+    const { action, currency, amount, reason } = req.body;
+    const numericAmount = parseFloat(amount);
+    const balanceField = currency === 'USDT' ? 'balance_usdt' : 'balance_NSL';
 
-    // Build update object
-    const updateData = {};
-    if (balance_NSL !== undefined) updateData.balance_NSL = balance_NSL;
-    if (balance_usdt !== undefined) updateData.balance_usdt = balance_usdt;
+    const result = await sequelize.transaction(async (t) => {
+      const user = await User.findOne({
+        where: { id: req.params.id },
+        lock: t.LOCK.UPDATE,
+        transaction: t
+      });
 
-    const [affectedRows] = await User.update(
-      updateData,
-      { where: { id: req.params.id } }
-    );
+      if (!user) {
+        const notFound = new Error('User not found');
+        notFound.statusCode = 404;
+        throw notFound;
+      }
 
-    if (affectedRows === 0) {
-      return res.status(404).json({ message: 'User not found' });
-    }
+      if (req.user.role !== 'superadmin' && user.role !== 'user') {
+        const forbidden = new Error('Admins can only adjust balances for normal users');
+        forbidden.statusCode = 403;
+        throw forbidden;
+      }
 
-    const user = await User.findByPk(req.params.id, {
-      attributes: { exclude: ['password_hash'] }
+      const currentBalance = parseFloat(user[balanceField]) || 0;
+      const signedAmount = action === 'deduct' ? -numericAmount : numericAmount;
+      const nextBalance = currentBalance + signedAmount;
+
+      if (nextBalance < 0) {
+        const insufficient = new Error(`Insufficient ${currency} balance to deduct this amount`);
+        insufficient.statusCode = 400;
+        throw insufficient;
+      }
+
+      user[balanceField] = nextBalance;
+      await user.save({ transaction: t });
+
+      await Transaction.create({
+        user_id: user.id,
+        type: action === 'add' ? 'recharge' : 'withdrawal',
+        amount_NSL: currency === 'NSL' ? numericAmount : 0,
+        amount_usdt: currency === 'USDT' ? numericAmount : 0,
+        status: 'approved',
+        approved_by: req.user.id,
+        notes: `Manual ${action === 'add' ? 'credit' : 'deduction'} by ${req.user.role}: ${reason}`,
+        completed_at: new Date(),
+        approved_at: new Date()
+      }, { transaction: t });
+
+      return {
+        user,
+        previousBalance: currentBalance,
+        newBalance: nextBalance,
+        signedAmount
+      };
     });
 
-    logger.warn(`Balance adjusted for ${user.phone}: NSL=${balance_NSL}, USDT=${balance_usdt}, Reason: ${reason}`);
+    logger.warn(`Manual balance ${action} by ${req.user.phone}: user=${result.user.phone} ${currency} amount=${numericAmount} previous=${result.previousBalance} new=${result.newBalance} reason=${reason}`);
+
+    await sendAccountNotification('Balance update', () => notificationService.notifyBalanceAdjusted(
+      result.user.id,
+      action,
+      numericAmount,
+      currency,
+      result.newBalance,
+      reason
+    ));
 
     res.json({
-      message: 'User balance updated',
+      message: `User balance ${action === 'add' ? 'credited' : 'deducted'}`,
       user: {
-        id: user.id,
-        phone: user.phone,
-        balance_NSL: user.balance_NSL,
-        balance_usdt: user.balance_usdt
+        id: result.user.id,
+        phone: result.user.phone,
+        role: result.user.role,
+        balance_NSL: result.user.balance_NSL,
+        balance_usdt: result.user.balance_usdt
+      },
+      adjustment: {
+        action,
+        currency,
+        amount: numericAmount,
+        previous_balance: result.previousBalance,
+        new_balance: result.newBalance
       }
     });
   } catch (error) {
     logger.error('Balance adjustment error:', error);
-    res.status(500).json({ message: 'Error adjusting balance', error: error.message });
+    res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Error adjusting balance', error: error.message });
   }
 });
 
@@ -227,6 +329,17 @@ router.patch('/users/:id/vip', authenticate, authorize(['superadmin']), adminLim
 
     logger.info(`User VIP level updated: ${user.phone} - ${vip_level}`);
 
+    if (vip_level !== 'none') {
+      await sendAccountNotification('VIP update', () => notificationService.notifyVIPUpgrade(user.id, vip_level));
+    } else {
+      await sendAccountNotification('VIP update', () => notificationService.notifyAccountUpdated(
+        user.id,
+        'VIP Level Updated',
+        'Your VIP level was changed to none.',
+        { priority: 'high', data: { vip_level, updated_by: req.user.id } }
+      ));
+    }
+
     res.json({
       message: 'User VIP level updated',
       user
@@ -240,7 +353,7 @@ router.patch('/users/:id/vip', authenticate, authorize(['superadmin']), adminLim
 // Admin: Create new user
 router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, validateCreateUser, async (req, res) => {
   try {
-    const { username, phone, password, role = 'user', status = 'active' } = req.body;
+    const { username, phone, password, role = 'user', status = 'active', ambassador_region, ambassador_sector } = req.body;
 
     if (!username || !phone || !password) {
       return res.status(400).json({ message: 'Username, phone and password are required' });
@@ -263,10 +376,19 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
       referral_code,
       role,
       status,
+      ambassador_region: role === 'ambassador' ? (ambassador_region || null) : null,
+      ambassador_sector: role === 'ambassador' ? (ambassador_sector || null) : null,
       kyc_verified: true
     });
 
     logger.info(`New user created by admin: ${username} (${phone})`);
+
+    await sendAccountNotification('Admin-created account', () => notificationService.notifyAccountUpdated(
+      user.id,
+      'Account Created',
+      'Your SalonMoney account was created by an administrator.',
+      { priority: 'high', action_url: '/dashboard', data: { created_by: req.user.id } }
+    ));
 
     res.status(201).json({
       message: 'User created successfully',
@@ -275,6 +397,8 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
         username: user.username,
         phone: user.phone,
         role: user.role,
+        ambassador_region: user.ambassador_region,
+        ambassador_sector: user.ambassador_sector,
         referral_code: user.referral_code,
         status: user.status
       }
@@ -290,7 +414,7 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
 // Super Admin: Create admin/superadmin users
 router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
   try {
-    const { username, phone, email, password, role } = req.body;
+    const { username, phone, email, password, role, ambassador_region, ambassador_sector } = req.body;
 
     // Validate required fields
     if (!username || !phone || !password || !role) {
@@ -300,7 +424,7 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
     }
 
     // Validate role - only allow admin-related roles
-    const allowedRoles = ['superadmin', 'admin', 'finance', 'verificator', 'approval'];
+    const allowedRoles = ['superadmin', 'admin', 'finance', 'verificator', 'approval', 'ambassador'];
     if (!allowedRoles.includes(role)) {
       return res.status(400).json({
         message: `Invalid role. Allowed roles: ${allowedRoles.join(', ')}`
@@ -330,6 +454,8 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
       password_hash: password,
       referral_code,
       role,
+      ambassador_region: role === 'ambassador' ? (ambassador_region || null) : null,
+      ambassador_sector: role === 'ambassador' ? (ambassador_sector || null) : null,
       status: 'active',
       email_verified: true,
       phone_verified: true,
@@ -437,12 +563,13 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
 // Admin: Get all products
 router.get('/products', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
+    const rate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
     const products = await Product.findAll({
       order: [['price_NSL', 'ASC']]
     });
 
     res.json({
-      products,
+      products: products.map(product => productWithRate(product, rate)),
       total: products.length
     });
   } catch (error) {
@@ -454,6 +581,7 @@ router.get('/products', authenticate, authorize(['superadmin', 'admin']), async 
 // Admin: Get product statistics
 router.get('/products/stats', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
+    const rate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
     const products = await Product.findAll();
     const stats = [];
 
@@ -483,7 +611,7 @@ router.get('/products/stats', authenticate, authorize(['superadmin', 'admin']), 
         product_id: product.id,
         product_name: product.name,
         price_NSL: product.price_NSL,
-        price_usdt: product.price_usdt,
+        price_usdt: parseFloat(priceUsdtForNsl(product.price_NSL, rate)),
         daily_income_NSL: product.daily_income_NSL,
         validity_days: product.validity_days,
         active: product.active,
@@ -533,8 +661,8 @@ router.post('/products', authenticate, authorize(['superadmin', 'admin']), async
     }
 
     // Calculate USDT price
-    const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
-    const price_usdt = (price_NSL / nslToUsdt).toFixed(2);
+    const nslToUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    const price_usdt = priceUsdtForNsl(price_NSL, nslToUsdt);
 
     const product = await Product.create({
       name,
@@ -572,8 +700,8 @@ router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), 
     if (validity_days   !== undefined) updates.validity_days = validity_days;
 
     if (updates.price_NSL) {
-      const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
-      updates.price_usdt = (updates.price_NSL / nslToUsdt).toFixed(2);
+      const nslToUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+      updates.price_usdt = priceUsdtForNsl(updates.price_NSL, nslToUsdt);
     }
 
     const [affectedRows] = await Product.update(updates, { where: { id } });
@@ -705,8 +833,8 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
   try {
     const { name, price_NSL, daily_income_NSL, validity_days, description, is_active } = req.body;
 
-    const nslToUsdt = parseInt(process.env.NSL_TO_USDT_RECHARGE || 25);
-    const price_usdt = (price_NSL / nslToUsdt).toFixed(2);
+    const nslToUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    const price_usdt = priceUsdtForNsl(price_NSL, nslToUsdt);
 
     const [affectedRows] = await Product.update(
       {
@@ -742,7 +870,7 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
 // ============ SUPERADMIN PASSWORD RESET ============
 
 // Superadmin: Reset user password
-router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']), adminLimiter, validateResetPassword, async (req, res) => {
+router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']), adminLimiter, validateAdminResetPassword, async (req, res) => {
   try {
     const { new_password } = req.body;
     const user = await User.findByPk(req.params.id);
@@ -758,6 +886,8 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
     // Update password (will be hashed by beforeUpdate hook if configured)
     user.password_hash = new_password;
     await user.save();
+
+    await sendAccountNotification('Admin password reset', () => notificationService.notifyPasswordReset(user.id, 'admin'));
 
     logger.warn(`Password reset by superadmin for user: ${user.phone || user.username}`);
 
@@ -789,10 +919,13 @@ router.patch('/users/:id/phone', authenticate, authorize(['superadmin']), adminL
     const user = await User.findByPk(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
+    const oldPhone = user.phone;
     user.phone = phone.trim();
     // If username was the old phone number, keep it in sync
-    if (user.username === user.phone) user.username = phone.trim();
+    if (user.username === oldPhone) user.username = phone.trim();
     await user.save();
+
+    await sendAccountNotification('Phone update', () => notificationService.notifyPhoneChanged(user.id, user.phone));
 
     logger.warn(`Phone changed by superadmin for user #${user.id}: ${phone.trim()}`);
     res.json({ message: 'Phone number updated', user: { id: user.id, phone: user.phone, username: user.username } });
@@ -937,6 +1070,8 @@ router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'adm
         .catch(err => logger.error('KYC approval email failed:', err));
     }
 
+    await sendAccountNotification('KYC approval', () => notificationService.notifyKYCVerified(user.id));
+
     res.json({ success: true, message: 'KYC approved', user });
   } catch (error) {
     logger.error('KYC approve error:', error);
@@ -969,6 +1104,8 @@ router.patch('/kyc/:userId/reject', authenticate, authorize(['superadmin', 'admi
       emailService.sendKYCRejected(user.email, user.username, reason)
         .catch(err => logger.error('KYC rejection email failed:', err));
     }
+
+    await sendAccountNotification('KYC rejection', () => notificationService.notifyKYCRejected(user.id, reason));
 
     res.json({ success: true, message: 'KYC rejected and documents cleared' });
   } catch (error) {
@@ -1048,7 +1185,7 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
 
       if (tx.type === 'withdrawal') {
         // Balance was already deducted at submission time — just mark approved, no balance change.
-        result = { txType: 'withdrawal', txId: tx.id };
+        result = { txType: 'withdrawal', txId: tx.id, userId: tx.user_id, amountNSL: tx.amount_NSL };
         logger.info(`Withdrawal ${tx.id} approved by admin ${req.user.username}`);
       } else {
         // Deposit: credit balance now — admin enters the raw SLE/NSL from receipt, fee applied here
@@ -1068,8 +1205,18 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
     });
 
     if (result.txType === 'withdrawal') {
+      await sendAccountNotification('Withdrawal approval', () => notificationService.notifyTransactionApproved(
+        result.userId,
+        'withdrawal',
+        result.amountNSL
+      ));
       res.json({ success: true, message: 'Withdrawal approved. Please process the payout manually.' });
     } else {
+      await sendAccountNotification('Deposit approval', () => notificationService.notifyTransactionApproved(
+        result.user.id,
+        'deposit',
+        result.creditNSL.toFixed(0)
+      ));
       res.json({
         success: true,
         message: `Approved. ${result.creditNSL.toFixed(0)} NSL credited (${result.feePercent}% fee applied).`,
@@ -1089,12 +1236,16 @@ router.patch('/transaction/:id/reject', authenticate, authorize(['superadmin', '
 
   try {
     let txType;
+    let txUserId;
+    let txAmountNSL;
     await sequelize.transaction(async (t) => {
       const tx = await Transaction.findOne({ where: { id: req.params.id }, lock: t.LOCK.UPDATE, transaction: t });
       if (!tx) { const e = new Error('Transaction not found'); e.status = 404; throw e; }
       if (tx.status !== 'pending') { const e = new Error('Already processed'); e.status = 400; throw e; }
 
       txType = tx.type;
+      txUserId = tx.user_id;
+      txAmountNSL = tx.amount_NSL;
       tx.status = 'rejected';
       tx.admin_notes = reason;
       await tx.save({ transaction: t });
@@ -1114,6 +1265,13 @@ router.patch('/transaction/:id/reject', authenticate, authorize(['superadmin', '
 
       logger.info(`Transaction ${tx.id} (${tx.type}) rejected by admin ${req.user.username}: ${reason}`);
     });
+
+    await sendAccountNotification('Transaction rejection', () => notificationService.notifyTransactionRejected(
+      txUserId,
+      txType,
+      txAmountNSL,
+      reason
+    ));
 
     res.json({ success: true, message: txType === 'withdrawal' ? 'Withdrawal rejected and balance refunded.' : 'Deposit rejected.' });
   } catch (error) {
@@ -1139,6 +1297,7 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
     const allowed = [
       'referral_l1_pct', 'referral_l2_pct', 'referral_l3_pct',
       'recharge_fee_pct', 'withdrawal_fee_pct',
+      'exchange_rate_nsl_per_usdt',
       'dur_short', 'dur_week', 'dur_month', 'dur_promo', 'dur_promo_label',
     ];
 

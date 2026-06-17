@@ -1,7 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../../models/User');
 const Product = require('../../models/Product');
-const bcrypt = require('bcryptjs');
 
 /**
  * Generate JWT token for testing
@@ -18,12 +17,10 @@ const generateToken = (userId, role = 'user') => {
  * Create a test user
  */
 const createTestUser = async (overrides = {}) => {
-  const hashedPassword = await bcrypt.hash('Test123!@#', 10);
-
   const userData = {
     username: `testuser${Date.now()}`,
     phone: `+1234567${Math.floor(Math.random() * 10000)}`,
-    password_hash: hashedPassword,
+    password_hash: 'Test123!@#',
     email: `test${Date.now()}@test.com`,
     role: 'user',
     status: 'active',

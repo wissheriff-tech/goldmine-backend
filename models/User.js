@@ -29,8 +29,18 @@ const User = sequelize.define('User', {
     allowNull: false
   },
   role: {
-    type: DataTypes.ENUM('user', 'admin', 'superadmin', 'finance', 'verificator', 'approval'),
+    type: DataTypes.ENUM('user', 'admin', 'superadmin', 'finance', 'verificator', 'approval', 'ambassador'),
     defaultValue: 'user'
+  },
+  ambassador_region: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    defaultValue: null
+  },
+  ambassador_sector: {
+    type: DataTypes.STRING(100),
+    allowNull: true,
+    defaultValue: null
   },
   referral_code: {
     type: DataTypes.STRING(50),

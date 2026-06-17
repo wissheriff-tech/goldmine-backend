@@ -7,6 +7,7 @@ const Session = require('../models/Session');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
+const notificationService = require('../utils/notificationService');
 
 const ACCESS_TOKEN_TTL_MS  = parseInt(process.env.ACCESS_TOKEN_TTL_MS  || String(24 * 60 * 60 * 1000));
 const REFRESH_TOKEN_TTL_MS = parseInt(process.env.REFRESH_TOKEN_TTL_MS || String(7  * 24 * 60 * 60 * 1000));
@@ -235,6 +236,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
     logger.info(`User logged in: ${identifier} (${user.role})`);
 
     let redirectTo = '/dashboard';
+    if (user.role === 'ambassador') redirectTo = '/ambassador';
     if (user.role === 'superadmin' || user.role === 'admin' || user.role === 'finance') redirectTo = '/admin';
 
     res.json({
@@ -252,6 +254,9 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
         balance_usdt: user.balance_usdt,
         vip_level: user.vip_level,
         referral_code: user.referral_code,
+        referred_by: user.referred_by,
+        ambassador_region: user.ambassador_region,
+        ambassador_sector: user.ambassador_sector,
         twoFactorEnabled: user.twoFactorEnabled,
         profile_photo: user.profile_photo
       }
@@ -315,6 +320,12 @@ router.post('/change-password', authenticate, validateChangePassword, async (req
     user.password_hash = newPassword;
     await user.save();
 
+    try {
+      await notificationService.notifyPasswordChanged(user.id);
+    } catch (notifyError) {
+      logger.error('Password change notification error:', notifyError);
+    }
+
     logger.info(`Password changed for user: ${user.phone}`);
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
@@ -368,7 +379,9 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
 
     // Determine redirect path based on role
     let redirectTo = '/dashboard';
-    if (user.role === 'superadmin' || user.role === 'admin' || user.role === 'finance') {
+    if (user.role === 'ambassador') {
+      redirectTo = '/ambassador';
+    } else if (user.role === 'superadmin' || user.role === 'admin' || user.role === 'finance') {
       redirectTo = '/admin';
     }
 
@@ -387,6 +400,9 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
         balance_usdt: user.balance_usdt,
         vip_level: user.vip_level,
         referral_code: user.referral_code,
+        referred_by: user.referred_by,
+        ambassador_region: user.ambassador_region,
+        ambassador_sector: user.ambassador_sector,
         twoFactorEnabled: user.twoFactorEnabled,
         profile_photo: user.profile_photo
       }
@@ -504,6 +520,12 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
     user.resetPasswordToken = null;
     user.resetPasswordExpires = null;
     await user.save();
+
+    try {
+      await notificationService.notifyPasswordReset(user.id, 'system');
+    } catch (notifyError) {
+      logger.error('Password reset notification error:', notifyError);
+    }
 
     logger.info(`Password reset successful for user: ${user.username}`);
     res.json({ message: 'Password reset successful. You can now login.' });

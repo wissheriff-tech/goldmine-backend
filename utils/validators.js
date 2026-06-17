@@ -82,14 +82,6 @@ const isValidVIPLevel = (level) => {
 };
 
 /**
- * Validate MongoDB ObjectId format
- */
-const isValidObjectId = (id) => {
-  if (!id) return false;
-  return /^[0-9a-fA-F]{24}$/.test(id);
-};
-
-/**
  * Validate crypto wallet address (basic validation)
  */
 const isValidWalletAddress = (address) => {
@@ -155,7 +147,6 @@ module.exports = {
   isValidTransactionType,
   isValidTransactionStatus,
   isValidVIPLevel,
-  isValidObjectId,
   isValidWalletAddress,
   sanitizeString,
   isValidImageFile,

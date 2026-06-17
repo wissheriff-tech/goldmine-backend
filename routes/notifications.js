@@ -2,6 +2,7 @@ const express = require('express');
 const { Notification, User } = require('../models');
 const { Op, fn, col } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
+const { adminLimiter } = require('../middleware/security');
 const notificationService = require('../utils/notificationService');
 const logger = require('../utils/logger');
 
@@ -75,6 +76,28 @@ router.patch('/mark-all-read', authenticate, async (req, res) => {
   }
 });
 
+const clearReadNotifications = async (req, res) => {
+  try {
+    const deletedCount = await Notification.destroy({
+      where: {
+        user_id: req.user.id,
+        read: true
+      }
+    });
+
+    res.json({
+      message: 'All read notifications cleared',
+      deleted_count: deletedCount
+    });
+  } catch (error) {
+    logger.error('Clear read notifications error:', error);
+    res.status(500).json({ message: 'Error clearing notifications', error: error.message });
+  }
+};
+
+// Delete all read notifications
+router.delete('/clear-read', authenticate, clearReadNotifications);
+
 // Delete notification
 router.delete('/:id', authenticate, async (req, res) => {
   try {
@@ -98,28 +121,8 @@ router.delete('/:id', authenticate, async (req, res) => {
   }
 });
 
-// Delete all read notifications
-router.delete('/clear-read', authenticate, async (req, res) => {
-  try {
-    const deletedCount = await Notification.destroy({
-      where: {
-        user_id: req.user.id,
-        read: true
-      }
-    });
-
-    res.json({
-      message: 'All read notifications cleared',
-      deleted_count: deletedCount
-    });
-  } catch (error) {
-    logger.error('Clear read notifications error:', error);
-    res.status(500).json({ message: 'Error clearing notifications', error: error.message });
-  }
-});
-
 // Admin: Send system announcement
-router.post('/admin/announcement', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
+router.post('/admin/announcement', authenticate, authorize(['superadmin', 'admin']), adminLimiter, async (req, res) => {
   try {
     const { title, message, priority, target_users } = req.body;
 
@@ -156,6 +159,53 @@ router.post('/admin/announcement', authenticate, authorize(['superadmin', 'admin
     res.status(500).json({ message: 'Error sending announcement', error: error.message });
   }
 });
+
+const sendAdminMessage = async (req, res) => {
+  try {
+    const { user_id, title, message, priority } = req.body;
+
+    if (!user_id || !title || !message) {
+      return res.status(400).json({ message: 'User, title, and message are required' });
+    }
+
+    const targetUser = await User.findByPk(user_id, {
+      attributes: ['id', 'username', 'phone', 'status']
+    });
+
+    if (!targetUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const notification = await notificationService.notifyAdminMessage(
+      targetUser.id,
+      title.trim(),
+      message.trim(),
+      {
+        priority: priority || 'high',
+        data: {
+          sender_id: req.user.id,
+          sender_username: req.user.username,
+          sender_role: req.user.role
+        }
+      }
+    );
+
+    logger.info(`Admin message sent by ${req.user.username || req.user.phone} to user ${targetUser.id}`);
+
+    res.status(201).json({
+      message: 'Special message sent successfully',
+      notification,
+      user: targetUser
+    });
+  } catch (error) {
+    logger.error('Send admin message error:', error);
+    res.status(500).json({ message: 'Error sending message', error: error.message });
+  }
+};
+
+// Admin: Send a targeted special message to one user
+router.post('/admin/message', authenticate, authorize(['superadmin', 'admin']), adminLimiter, sendAdminMessage);
+router.post('/message', authenticate, authorize(['superadmin', 'admin']), adminLimiter, sendAdminMessage);
 
 // Admin: Get notification statistics
 router.get('/admin/stats', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {

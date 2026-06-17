@@ -177,7 +177,11 @@ const buyProductSchema = Joi.object({
     .messages({
       'any.required': 'Product ID is required',
       'number.base': 'Product ID must be a number'
-    })
+    }),
+
+  duration_key: Joi.string()
+    .valid('short', 'week', 'month', 'promo')
+    .optional()
 });
 
 const createProductSchema = Joi.object({
@@ -276,8 +280,18 @@ const createUserSchema = Joi.object({
     .required(),
 
   role: Joi.string()
-    .valid('user', 'admin', 'finance', 'verificator', 'approval', 'superadmin')
+    .valid('user', 'admin', 'finance', 'verificator', 'approval', 'superadmin', 'ambassador')
     .default('user'),
+
+  ambassador_region: Joi.string()
+    .max(100)
+    .optional()
+    .allow('', null),
+
+  ambassador_sector: Joi.string()
+    .max(100)
+    .optional()
+    .allow('', null),
 
   status: Joi.string()
     .valid('pending', 'active', 'frozen')
@@ -285,13 +299,20 @@ const createUserSchema = Joi.object({
 });
 
 const updateBalanceSchema = Joi.object({
-  balance_NSL: Joi.number()
-    .min(0)
+  action: Joi.string()
+    .valid('add', 'deduct')
     .required(),
 
-  balance_usdt: Joi.number()
-    .min(0)
+  currency: Joi.string()
+    .valid('NSL', 'USDT')
     .required(),
+
+  amount: Joi.number()
+    .positive()
+    .required()
+    .messages({
+      'number.positive': 'Amount must be greater than zero'
+    }),
 
   reason: Joi.string()
     .required()
@@ -303,8 +324,18 @@ const updateBalanceSchema = Joi.object({
 
 const updateRoleSchema = Joi.object({
   role: Joi.string()
-    .valid('user', 'admin', 'finance', 'verificator', 'approval', 'superadmin')
-    .required()
+    .valid('user', 'admin', 'finance', 'verificator', 'approval', 'superadmin', 'ambassador')
+    .required(),
+
+  ambassador_region: Joi.string()
+    .max(100)
+    .optional()
+    .allow('', null),
+
+  ambassador_sector: Joi.string()
+    .max(100)
+    .optional()
+    .allow('', null)
 });
 
 const updateStatusSchema = Joi.object({
@@ -317,6 +348,16 @@ const updateVIPSchema = Joi.object({
   vip_level: Joi.string()
     .valid('none', 'VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9')
     .required()
+});
+
+const adminResetPasswordSchema = Joi.object({
+  new_password: Joi.string()
+    .min(6)
+    .required()
+    .messages({
+      'string.min': 'Password must be at least 6 characters',
+      'any.required': 'New password is required'
+    })
 });
 
 // Finance Schemas
@@ -409,6 +450,7 @@ module.exports = {
   validateUpdateRole: validate(updateRoleSchema),
   validateUpdateStatus: validate(updateStatusSchema),
   validateUpdateVIP: validate(updateVIPSchema),
+  validateAdminResetPassword: validate(adminResetPasswordSchema),
 
   // Finance validations
   validateAddCurrency: validate(addCurrencySchema),

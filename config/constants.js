@@ -6,8 +6,8 @@
 module.exports = {
   // Currency Conversion Rates
   CURRENCY: {
-    NSL_TO_USDT_RATE: process.env.NSL_TO_USDT_RECHARGE || 25,
-    USDT_TO_NSL_RATE: process.env.USDT_TO_NSL_WITHDRAWAL || 25,
+    NSL_TO_USDT_RATE: process.env.NSL_TO_USDT_RECHARGE || 23.99,
+    USDT_TO_NSL_RATE: process.env.USDT_TO_NSL_WITHDRAWAL || 23.99,
     DEFAULT_CURRENCY: 'NSL',
     SUPPORTED_CURRENCIES: ['NSL', 'USDT']
   },
@@ -43,7 +43,7 @@ module.exports = {
 
   // User Settings
   USER: {
-    ROLES: ['user', 'admin', 'superadmin', 'finance', 'verificator', 'approval'],
+    ROLES: ['user', 'admin', 'superadmin', 'finance', 'verificator', 'approval', 'ambassador'],
     DEFAULT_ROLE: 'user',
     STATUSES: ['pending', 'active', 'frozen', 'rejected'],
     DEFAULT_STATUS: 'pending',

@@ -9,6 +9,7 @@ const compression = require('compression');
 const dotenv = require('dotenv');
 const logger = require('./utils/logger');
 const emailService = require('./utils/emailService');
+const ps = require('./utils/platformSettings');
 const { Op } = require('sequelize');
 
 // Security middleware
@@ -58,10 +59,9 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow no-origin only in development (Postman, curl, etc.)
+    // Allow no-origin server-to-server requests, including uptime checks and Vercel probes.
     if (!origin) {
-      if (process.env.NODE_ENV !== 'production') return callback(null, true);
-      return callback(new Error('Origin required in production'));
+      return callback(null, true);
     }
 
     // Check if origin matches any allowed origin (string or regex)
@@ -80,7 +80,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   optionsSuccessStatus: 200
 };
 
@@ -195,6 +195,27 @@ const syncSuperAdminUser = async (label) => {
   }
 };
 
+const ensureNotificationEnumValues = async () => {
+  if (!sequelize || sequelize.getDialect?.() !== 'postgres') return;
+
+  const notificationTypes = [
+    'account_updated',
+    'balance_adjusted',
+    'phone_changed',
+    'password_changed',
+    'password_reset',
+    'admin_message'
+  ];
+
+  for (const type of notificationTypes) {
+    try {
+      await sequelize.query(`ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS '${type}'`);
+    } catch (error) {
+      logger.warn(`Notification enum compatibility skipped for ${type}: ${error.message}`);
+    }
+  }
+};
+
 // On Vercel: skip startup DB sync (too slow for cold start). Tables are synced lazily.
 // On server: sync on startup as normal.
 if (!isVercel) {
@@ -202,6 +223,7 @@ if (!isVercel) {
     try {
       await sequelize.authenticate();
       logger.info('Database connected');
+      await ensureNotificationEnumValues();
       await sequelize.sync({ alter: false, force: false });
       logger.info('Database tables synced');
       await syncSuperAdminUser('Database');
@@ -235,6 +257,7 @@ const securityRoutes = require('./routes/security');
 const depositRoutes = require('./routes/deposit');
 const testimonialsRoutes = require('./routes/testimonials');
 const chatRoutes = require('./routes/chat');
+const ambassadorRoutes = require('./routes/ambassador');
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
@@ -250,15 +273,24 @@ const initDb = async () => {
     await sequelize.authenticate();
     logger.info('Vercel DB: authenticated');
     // Add enum values and missing columns if not already present
-    try {
-      await sequelize.query(`ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'orange_money'`);
-      await sequelize.query(`ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'africell'`);
-      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "reference_id" VARCHAR(255)`);
-      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "approved_at" TIMESTAMP WITH TIME ZONE`);
-      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "rejected_at" TIMESTAMP WITH TIME ZONE`);
-      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "admin_notes" TEXT`);
-      await sequelize.query(`ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "confirmations" INTEGER DEFAULT 0`);
-    } catch (_) { /* ignore */ }
+    const safeMigrations = [
+      `ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'orange_money'`,
+      `ALTER TYPE "enum_transactions_payment_method" ADD VALUE IF NOT EXISTS 'africell'`,
+      `ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "reference_id" VARCHAR(255)`,
+      `ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "approved_at" TIMESTAMP WITH TIME ZONE`,
+      `ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "rejected_at" TIMESTAMP WITH TIME ZONE`,
+      `ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "admin_notes" TEXT`,
+      `ALTER TABLE "transactions" ADD COLUMN IF NOT EXISTS "confirmations" INTEGER DEFAULT 0`,
+      `ALTER TYPE "enum_users_role" ADD VALUE IF NOT EXISTS 'ambassador'`,
+      `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ambassador_region" VARCHAR(100)`,
+      `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ambassador_sector" VARCHAR(100)`,
+    ];
+    for (const migration of safeMigrations) {
+      try {
+        await sequelize.query(migration);
+      } catch (_) { /* ignore dialect-specific no-op migrations */ }
+    }
+    await ensureNotificationEnumValues();
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
     await syncSuperAdminUser('Vercel DB');
@@ -288,12 +320,14 @@ if (isVercel) {
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/superadmin', adminRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/verificator', verificatorRoutes);
 app.use('/api/approval', approvalRoutes);
 app.use('/api/products', productsRoutes);
 app.use('/api/currency', currencyRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/admin/notifications', notificationRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/batch', batchRoutes);
 app.use('/api/export', exportRoutes);
@@ -301,12 +335,18 @@ app.use('/api/security', securityRoutes);
 app.use('/api/deposit', depositRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/ambassador', ambassadorRoutes);
 app.use('/api/orange-money', require('./routes/orangeMoney'));
 app.use('/api/cron', require('./routes/cron'));
 
 // Root API info
 app.get('/api', (req, res) => {
   res.json({ name: 'SalonMoney API', status: 'running', version: '1.0.0' });
+});
+
+app.get(['/admin', '/superadmin'], (req, res) => {
+  const frontendUrl = (process.env.FRONTEND_URL || 'https://salonmoneynew.vercel.app').replace(/\/+$/, '');
+  res.redirect(302, `${frontendUrl}/admin`);
 });
 
 // Seed products (admin-only, idempotent)
@@ -316,7 +356,7 @@ app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
 }, async (req, res) => {
 
   const Product = require('./models/Product');
-  const NSL_RATE = parseInt(process.env.NSL_TO_USDT_RECHARGE || 23);
+  const NSL_RATE = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
   const plans = [
     { name: 'VIP0', price_NSL: 500,     daily_income_NSL: 15,    description: 'Starter package — begin your journey with minimal risk.' },
     { name: 'VIP1', price_NSL: 1000,    daily_income_NSL: 40,    description: 'Entry-level package with steady daily returns.' },
@@ -426,6 +466,7 @@ cron.schedule('1 0 * * *', async () => {
   try {
     logger.info('Running auto-renewal cron job...');
     const { User, UserProduct, Product, Transaction } = require('./models');
+    const nslRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
 
     const now = new Date();
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
@@ -457,7 +498,7 @@ cron.schedule('1 0 * * *', async () => {
             user_id: user.id,
             type: 'renewal',
             amount_NSL: product.price_NSL,
-            amount_usdt: product.price_usdt,
+            amount_usdt: parseFloat((product.price_NSL / nslRate).toFixed(2)),
             product_id: product.id,
             status: 'approved',
             notes: `Auto-renewal of ${product.name} for ${product.validity_days} days`

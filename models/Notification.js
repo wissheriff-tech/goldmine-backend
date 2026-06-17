@@ -17,10 +17,12 @@ const Notification = sequelize.define('Notification', {
       'product_purchased', 'product_expiring', 'product_expired',
       'daily_income', 'referral_bonus',
       'account_approved', 'account_suspended',
+      'account_updated', 'balance_adjusted', 'phone_changed',
+      'password_changed', 'password_reset',
       'kyc_verified', 'kyc_rejected',
       'withdrawal_approved', 'withdrawal_rejected',
       'recharge_approved', 'recharge_rejected',
-      'system_announcement', 'security_alert', 'vip_upgrade'
+      'system_announcement', 'admin_message', 'security_alert', 'vip_upgrade'
     ),
     allowNull: false
   },
