@@ -30,6 +30,9 @@ const productWithRate = (product, rate) => {
   data.exchange_rate_nsl_per_usdt = rate;
   return data;
 };
+const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
+const normalizePhoneInput = (value) => String(value || '').trim().replace(/[\s\-().]/g, '');
+const isValidPhoneInput = (value) => /^\+?[1-9]\d{6,14}$/.test(normalizePhoneInput(value));
 
 const sendAccountNotification = async (description, task) => {
   try {
@@ -879,8 +882,8 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
       return res.status(404).json({ message: 'User not found' });
     }
 
-    if (!new_password || new_password.length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    if (!isStrongPassword(new_password)) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character' });
     }
 
     // Update password (will be hashed by beforeUpdate hook if configured)
@@ -910,8 +913,13 @@ router.patch('/users/:id/phone', authenticate, authorize(['superadmin']), adminL
   try {
     const { phone } = req.body;
     if (!phone || !phone.trim()) return res.status(400).json({ message: 'Phone number is required' });
+    if (!isValidPhoneInput(phone)) {
+      return res.status(400).json({ message: 'Please enter a valid phone number' });
+    }
 
-    const exists = await User.findOne({ where: { phone: phone.trim() } });
+    const normalizedPhone = normalizePhoneInput(phone);
+
+    const exists = await User.findOne({ where: { phone: normalizedPhone } });
     if (exists && exists.id !== parseInt(req.params.id)) {
       return res.status(400).json({ message: 'Phone number already in use by another account' });
     }
@@ -920,14 +928,14 @@ router.patch('/users/:id/phone', authenticate, authorize(['superadmin']), adminL
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     const oldPhone = user.phone;
-    user.phone = phone.trim();
+    user.phone = normalizedPhone;
     // If username was the old phone number, keep it in sync
-    if (user.username === oldPhone) user.username = phone.trim();
+    if (user.username === oldPhone) user.username = normalizedPhone;
     await user.save();
 
     await sendAccountNotification('Phone update', () => notificationService.notifyPhoneChanged(user.id, user.phone));
 
-    logger.warn(`Phone changed by superadmin for user #${user.id}: ${phone.trim()}`);
+    logger.warn(`Phone changed by superadmin for user #${user.id}: ${normalizedPhone}`);
     res.json({ message: 'Phone number updated', user: { id: user.id, phone: user.phone, username: user.username } });
   } catch (error) {
     logger.error('Phone update error:', error);

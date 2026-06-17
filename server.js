@@ -133,10 +133,6 @@ const generateStartupReferralCode = () => Math.random().toString(36).substring(2
 
 const syncSuperAdminUser = async (label) => {
   const adminConfig = getSuperAdminConfig();
-  if (!adminConfig.password) {
-    logger.error(`${label}: SUPER_ADMIN_PASSWORD is required; skipping superadmin create/reset`);
-    return;
-  }
 
   let admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
   if (!admin) {
@@ -152,6 +148,11 @@ const syncSuperAdminUser = async (label) => {
   }
 
   if (!admin) {
+    if (!adminConfig.password) {
+      logger.error(`${label}: SUPER_ADMIN_PASSWORD is required to seed the first superadmin`);
+      return;
+    }
+
     await User.create({
       username: adminConfig.username,
       phone: adminConfig.phone,
@@ -168,9 +169,6 @@ const syncSuperAdminUser = async (label) => {
   }
 
   const updates = {};
-  if (admin.username !== adminConfig.username) updates.username = adminConfig.username;
-  if (admin.phone !== adminConfig.phone) updates.phone = adminConfig.phone;
-  if (admin.email !== adminConfig.email) updates.email = adminConfig.email;
   if (admin.role !== 'superadmin') updates.role = 'superadmin';
   if (admin.status !== 'active') updates.status = 'active';
   if (!admin.referral_code || admin.referral_code === 'ADMIN00001') {
@@ -179,19 +177,11 @@ const syncSuperAdminUser = async (label) => {
   if (!admin.kyc_verified) updates.kyc_verified = true;
   if (!admin.emailVerified) updates.emailVerified = true;
 
-  let passwordMatches = false;
-  try {
-    passwordMatches = await admin.comparePassword(adminConfig.password);
-  } catch (_) {
-    passwordMatches = false;
-  }
-  if (!passwordMatches) updates.password_hash = adminConfig.password;
-
   if (Object.keys(updates).length > 0) {
     await admin.update(updates);
-    logger.info(`${label}: superadmin synced`);
+    logger.info(`${label}: superadmin account protections synced`);
   } else {
-    logger.info(`${label}: superadmin already synced`);
+    logger.info(`${label}: superadmin account protections already synced`);
   }
 };
 

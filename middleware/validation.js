@@ -352,10 +352,12 @@ const updateVIPSchema = Joi.object({
 
 const adminResetPasswordSchema = Joi.object({
   new_password: Joi.string()
-    .min(6)
+    .min(8)
+    .pattern(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
     .required()
     .messages({
-      'string.min': 'Password must be at least 6 characters',
+      'string.min': 'Password must be at least 8 characters',
+      'string.pattern.base': 'Password must contain uppercase, lowercase, number, and special character',
       'any.required': 'New password is required'
     })
 });

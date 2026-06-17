@@ -19,7 +19,11 @@ const createSuperAdmin = async () => {
     const superAdminUsername = process.env.SUPER_ADMIN_USERNAME || 'superadmin';
     const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@salonmoney.com';
     const superAdminPhone = process.env.SUPER_ADMIN_PHONE || '+232777777777';
-    const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'Admin@SuperSecure2024!';
+    const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
+
+    if (!superAdminPassword) {
+      throw new Error('SUPER_ADMIN_PASSWORD is required. Refusing to use a hardcoded default password.');
+    }
 
     // Check if super admin already exists
     const existingSuperAdmin = await User.findOne({

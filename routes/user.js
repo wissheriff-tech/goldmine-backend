@@ -8,13 +8,16 @@ const Transaction = require('../models/Transaction');
 const Referral = require('../models/Referral');
 const Product = require('../models/Product');
 const UserProduct = require('../models/UserProduct');
+const Session = require('../models/Session');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const notificationService = require('../utils/notificationService');
 const { profileUpload, paymentUpload, kycUpload, assertImageMagicBytes, assertDocumentMagicBytes } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs');
 const { put: blobPut } = require('@vercel/blob');
 const isVercel = process.env.VERCEL === '1';
+const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
 
 // Validation and Security Middleware
 const {
@@ -73,6 +76,49 @@ router.get('/dashboard', authenticate, async (req, res) => {
   } catch (error) {
     logger.error('Dashboard error:', error);
     res.status(500).json({ message: 'Error fetching dashboard', error: error.message });
+  }
+});
+
+router.put('/change-password', authenticate, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Current password and new password are required' });
+    }
+    if (!isStrongPassword(newPassword)) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character' });
+    }
+
+    const user = await User.scope('withSecrets').findByPk(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    const passwordMatches = await user.comparePassword(currentPassword);
+    if (!passwordMatches) {
+      return res.status(401).json({ message: 'Current password is incorrect' });
+    }
+
+    const samePassword = await user.comparePassword(newPassword);
+    if (samePassword) {
+      return res.status(400).json({ message: 'New password must be different from the current password' });
+    }
+
+    user.password_hash = newPassword;
+    await user.save();
+    await Session.update({ is_active: false }, { where: { user_id: user.id, is_active: true } });
+
+    res.clearCookie('access_token');
+    res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+
+    try {
+      await notificationService.notifyPasswordChanged(user.id);
+    } catch (notifyError) {
+      logger.error('Password change notification error:', notifyError);
+    }
+
+    res.json({ message: 'Password changed successfully. Please sign in again.' });
+  } catch (error) {
+    logger.error('User password change error:', error);
+    res.status(500).json({ message: 'Error changing password' });
   }
 });
 

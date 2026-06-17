@@ -15,6 +15,7 @@ const REMEMBER_ME_ACCESS_TTL_MS  = 30 * 24 * 60 * 60 * 1000;
 const REMEMBER_ME_REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
+const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 const setCookies = (res, accessToken, refreshToken, rememberMe = false) => {
@@ -469,7 +470,7 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
 
     // Generate reset token
     const resetToken = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = resetToken;
+    user.resetPasswordToken = hashToken(resetToken);
     user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
     await user.save();
 
@@ -500,13 +501,13 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
       return res.status(400).json({ message: 'Password is required' });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    if (!isStrongPassword(password)) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character' });
     }
 
     const user = await User.scope('withSecrets').findOne({
       where: {
-        resetPasswordToken: token,
+        resetPasswordToken: hashToken(token),
         resetPasswordExpires: { [Op.gt]: new Date() }
       }
     });
@@ -520,6 +521,7 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
     user.resetPasswordToken = null;
     user.resetPasswordExpires = null;
     await user.save();
+    await Session.update({ is_active: false }, { where: { user_id: user.id } });
 
     try {
       await notificationService.notifyPasswordReset(user.id, 'system');
