@@ -39,6 +39,7 @@ router.get('/dashboard', authenticate, async (req, res) => {
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
+    const rate = await getNslPerUsdt();
 
     const userProducts = await UserProduct.findAll({
       where: { user_id: user.id, is_active: true },
@@ -57,7 +58,8 @@ router.get('/dashboard', authenticate, async (req, res) => {
         username: user.username,
         role: user.role,
         balance_NSL: user.balance_NSL,
-        balance_usdt: user.balance_usdt,
+        balance_usdt: nslToUsdt(user.balance_NSL, rate),
+        exchange_rate_nsl_per_usdt: rate,
         vip_level: user.vip_level,
         referral_code: user.referral_code,
         referred_by: user.referred_by,

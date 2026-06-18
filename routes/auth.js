@@ -8,6 +8,7 @@ const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
+const { getNslPerUsdt, nslToUsdt } = require('../utils/currencyConversion');
 
 const ACCESS_TOKEN_TTL_MS  = parseInt(process.env.ACCESS_TOKEN_TTL_MS  || String(24 * 60 * 60 * 1000));
 const REFRESH_TOKEN_TTL_MS = parseInt(process.env.REFRESH_TOKEN_TTL_MS || String(7  * 24 * 60 * 60 * 1000));
@@ -16,6 +17,25 @@ const REMEMBER_ME_REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
+const authUserPayload = async (user) => {
+  const rate = await getNslPerUsdt();
+  return {
+    id: user.id,
+    username: user.username,
+    phone: user.phone,
+    email: user.email,
+    role: user.role,
+    balance_NSL: user.balance_NSL,
+    balance_usdt: nslToUsdt(user.balance_NSL, rate),
+    vip_level: user.vip_level,
+    referral_code: user.referral_code,
+    referred_by: user.referred_by,
+    ambassador_region: user.ambassador_region,
+    ambassador_sector: user.ambassador_sector,
+    twoFactorEnabled: user.twoFactorEnabled,
+    profile_photo: user.profile_photo
+  };
+};
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 const setCookies = (res, accessToken, refreshToken, rememberMe = false) => {
@@ -245,22 +265,7 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       token,
       refreshToken,
       redirectTo,
-      user: {
-        id: user.id,
-        username: user.username,
-        phone: user.phone,
-        email: user.email,
-        role: user.role,
-        balance_NSL: user.balance_NSL,
-        balance_usdt: user.balance_usdt,
-        vip_level: user.vip_level,
-        referral_code: user.referral_code,
-        referred_by: user.referred_by,
-        ambassador_region: user.ambassador_region,
-        ambassador_sector: user.ambassador_sector,
-        twoFactorEnabled: user.twoFactorEnabled,
-        profile_photo: user.profile_photo
-      }
+      user: await authUserPayload(user)
     });
   } catch (error) {
     logger.error('Login error:', error);
@@ -391,22 +396,7 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
       token,
       refreshToken,
       redirectTo,
-      user: {
-        id: user.id,
-        username: user.username,
-        phone: user.phone,
-        email: user.email,
-        role: user.role,
-        balance_NSL: user.balance_NSL,
-        balance_usdt: user.balance_usdt,
-        vip_level: user.vip_level,
-        referral_code: user.referral_code,
-        referred_by: user.referred_by,
-        ambassador_region: user.ambassador_region,
-        ambassador_sector: user.ambassador_sector,
-        twoFactorEnabled: user.twoFactorEnabled,
-        profile_photo: user.profile_photo
-      }
+      user: await authUserPayload(user)
     });
   } catch (error) {
     logger.error('2FA verification error:', error);
