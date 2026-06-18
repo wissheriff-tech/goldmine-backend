@@ -18,6 +18,8 @@ const {
   globalLimiter,
   requestLogger,
   validateContentType,
+  createCookieWriteGuard,
+  sanitizeProductionErrors,
   preventParameterPollution
 } = require('./middleware/security');
 const { authenticate } = require('./middleware/auth');
@@ -53,9 +55,20 @@ app.set('trust proxy', 1);
 // CORS Configuration
 const allowedOrigins = [
   'http://localhost:3000',
+  'http://localhost:3001',
   'https://salonmoneynew.vercel.app',
   process.env.FRONTEND_URL,
 ].filter(Boolean);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  return allowedOrigins.some(allowed => {
+    if (allowed instanceof RegExp) {
+      return allowed.test(origin);
+    }
+    return allowed === origin;
+  });
+};
 
 const corsOptions = {
   origin: function (origin, callback) {
@@ -65,14 +78,7 @@ const corsOptions = {
     }
 
     // Check if origin matches any allowed origin (string or regex)
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (allowed instanceof RegExp) {
-        return allowed.test(origin);
-      }
-      return allowed === origin;
-    });
-
-    if (isAllowed) {
+    if (isAllowedOrigin(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
@@ -94,6 +100,8 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(preventParameterPollution); // Prevent parameter pollution
 app.use(requestLogger); // Log all requests
 app.use(validateContentType); // Validate content types
+app.use(createCookieWriteGuard(isAllowedOrigin)); // CSRF-style protection for cookie-auth writes
+app.use(sanitizeProductionErrors); // Avoid exposing internal error details in production route catches
 
 // Serve uploaded files — authenticated route only (no unauthenticated static access)
 // C-2 FIX: sanitize the path segment to prevent path traversal attacks

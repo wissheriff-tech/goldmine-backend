@@ -1,6 +1,8 @@
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 
+const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 /**
  * Security Headers Middleware
  * Uses Helmet to set various HTTP headers for security
@@ -220,6 +222,51 @@ const validateContentType = (req, res, next) => {
   next();
 };
 
+const createCookieWriteGuard = (isAllowedOrigin) => {
+  return (req, res, next) => {
+    if (!UNSAFE_METHODS.has(req.method)) return next();
+    if (!req.path.startsWith('/api/')) return next();
+
+    const hasCookieAuth = Boolean(req.cookies?.access_token || req.cookies?.refresh_token);
+    if (!hasCookieAuth) return next();
+
+    const origin = req.get('origin');
+    if (origin && !isAllowedOrigin(origin)) {
+      return res.status(403).json({ success: false, message: 'Request origin is not allowed' });
+    }
+
+    const requestedWith = req.get('x-requested-with');
+    const hasBearer = req.get('authorization')?.startsWith('Bearer ');
+    if (!hasBearer && requestedWith !== 'XMLHttpRequest') {
+      return res.status(403).json({ success: false, message: 'Request verification failed' });
+    }
+
+    next();
+  };
+};
+
+const sanitizeProductionErrors = (req, res, next) => {
+  const originalJson = res.json.bind(res);
+
+  res.json = (body) => {
+    if (
+      process.env.NODE_ENV === 'production' &&
+      res.statusCode >= 500 &&
+      body &&
+      typeof body === 'object' &&
+      Object.prototype.hasOwnProperty.call(body, 'error')
+    ) {
+      const sanitized = { ...body };
+      delete sanitized.error;
+      return originalJson(sanitized);
+    }
+
+    return originalJson(body);
+  };
+
+  next();
+};
+
 /**
  * Prevent Parameter Pollution
  */
@@ -261,5 +308,7 @@ module.exports = {
   ipWhitelist,
   requestLogger,
   validateContentType,
+  createCookieWriteGuard,
+  sanitizeProductionErrors,
   preventParameterPollution
 };
