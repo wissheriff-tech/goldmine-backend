@@ -12,6 +12,7 @@
     "test:unit": "cross-env NODE_ENV=test jest __tests__/models",
     "test:integration": "cross-env NODE_ENV=test jest --passWithNoTests __tests__/integration",
     "seed:admin": "node scripts/admin/createSuperAdmin.js",
+    "sync:usdt-balances": "node scripts/admin/syncUsdtBalances.js",
     "seed:products": "node scripts/seed/seedProducts.js",
     "seed:currencies": "node scripts/seed/seedCurrencies.js"
   },

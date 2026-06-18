@@ -13,6 +13,7 @@ const {
   nslToUsdt,
   syncUsdtBalanceFromNsl
 } = require('../utils/currencyConversion');
+const { syncUserUsdtBalances } = require('../utils/balanceSync');
 
 // Validation and Security Middleware
 const {
@@ -1349,6 +1350,21 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
   } catch (err) {
     logger.error('Platform settings save error:', err);
     res.status(500).json({ message: 'Error saving platform settings' });
+  }
+});
+
+router.post('/sync-usdt-balances', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
+  try {
+    const result = await syncUserUsdtBalances();
+    logger.warn(`USDT balance sync by ${req.user.phone}: scanned=${result.scanned}, updated=${result.updated}, rate=${result.exchange_rate_nsl_per_usdt}`);
+    res.json({
+      success: true,
+      message: 'USDT balances synced from NSL balances',
+      ...result,
+    });
+  } catch (error) {
+    logger.error('USDT balance sync error:', error);
+    res.status(500).json({ message: 'Error syncing USDT balances' });
   }
 });
 
