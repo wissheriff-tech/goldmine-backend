@@ -67,7 +67,7 @@ router.post('/users/update-vip', authenticate, authorize(['superadmin', 'admin']
       return res.status(400).json({ message: 'User IDs array is required' });
     }
 
-    const validVipLevels = ['none', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'];
+    const validVipLevels = ['none', 'VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'];
     if (!validVipLevels.includes(vip_level)) {
       return res.status(400).json({ message: 'Invalid VIP level' });
     }

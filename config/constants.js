@@ -6,8 +6,9 @@
 module.exports = {
   // Currency Conversion Rates
   CURRENCY: {
-    NSL_TO_USDT_RATE: process.env.NSL_TO_USDT_RECHARGE || 23.99,
-    USDT_TO_NSL_RATE: process.env.USDT_TO_NSL_WITHDRAWAL || 23.99,
+    EXCHANGE_RATE_API_URL: process.env.EXCHANGE_RATE_API_URL || 'https://open.er-api.com/v6/latest/USD',
+    EXCHANGE_RATE_TARGET_CODE: process.env.EXCHANGE_RATE_TARGET_CODE || 'SLE',
+    FALLBACK_NSL_PER_USDT: parseFloat(process.env.EXCHANGE_RATE_FALLBACK_NSL_PER_USDT) || 23.99,
     DEFAULT_CURRENCY: 'NSL',
     SUPPORTED_CURRENCIES: ['NSL', 'USDT']
   },
@@ -29,7 +30,7 @@ module.exports = {
   // Product Settings
   PRODUCT: {
     DEFAULT_VALIDITY_DAYS: 7,
-    VIP_LEVELS: ['VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'],
+    VIP_LEVELS: ['VIP0', 'VIP1', 'VIP2', 'VIP3', 'VIP4', 'VIP5', 'VIP6', 'VIP7', 'VIP8', 'VIP9'],
     AUTO_RENEWAL_ENABLED: true
   },
 

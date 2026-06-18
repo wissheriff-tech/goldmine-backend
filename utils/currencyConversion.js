@@ -1,4 +1,5 @@
 const ps = require('./platformSettings');
+const { getExchangeRateSnapshot } = require('./exchangeRateProvider');
 
 const DEFAULT_NSL_PER_USDT = Number(ps.DEFAULTS.exchange_rate_nsl_per_usdt) || 23.99;
 
@@ -14,7 +15,8 @@ function normalizeRate(value) {
 }
 
 async function getNslPerUsdt() {
-  return normalizeRate(await ps.get('exchange_rate_nsl_per_usdt'));
+  const snapshot = await getExchangeRateSnapshot();
+  return normalizeRate(snapshot.rate);
 }
 
 function nslToUsdt(amountNSL, rate = DEFAULT_NSL_PER_USDT) {

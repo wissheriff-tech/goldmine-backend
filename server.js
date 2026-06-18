@@ -11,6 +11,7 @@ const logger = require('./utils/logger');
 const emailService = require('./utils/emailService');
 const ps = require('./utils/platformSettings');
 const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('./utils/currencyConversion');
+const { VIP_PRODUCT_PLANS, planToProductSeed } = require('./utils/productPlans');
 const { Op } = require('sequelize');
 
 // Security middleware
@@ -354,31 +355,16 @@ app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
 
   const Product = require('./models/Product');
   const NSL_RATE = await getNslPerUsdt();
-  const plans = [
-    { name: 'VIP0', price_NSL: 500,     daily_income_NSL: 15,    description: 'Starter package — begin your journey with minimal risk.' },
-    { name: 'VIP1', price_NSL: 1000,    daily_income_NSL: 40,    description: 'Entry-level package with steady daily returns.' },
-    { name: 'VIP2', price_NSL: 3000,    daily_income_NSL: 150,   description: 'Enhanced package with better returns and faster processing.' },
-    { name: 'VIP3', price_NSL: 8000,    daily_income_NSL: 450,   description: 'Premium package with dedicated support.' },
-    { name: 'VIP4', price_NSL: 20000,   daily_income_NSL: 1200,  description: 'Elite package with reduced fees and express withdrawals.' },
-    { name: 'VIP5', price_NSL: 50000,   daily_income_NSL: 3200,  description: 'Platinum package with exclusive promotions.' },
-    { name: 'VIP6', price_NSL: 100000,  daily_income_NSL: 6800,  description: 'Diamond package — zero withdrawal fees.' },
-    { name: 'VIP7', price_NSL: 250000,  daily_income_NSL: 18000, description: 'Royal package with concierge investment service.' },
-    { name: 'VIP8', price_NSL: 500000,  daily_income_NSL: 40000, description: 'Ultimate package with lifetime premium support.' },
-    { name: 'VIP9', price_NSL: 1000000, daily_income_NSL: 85000, description: 'Legend package — the absolute peak.' },
-  ];
+  const settings = await ps.getAll();
+  const validityDays = Number(settings.dur_week) || 7;
+  const plans = VIP_PRODUCT_PLANS.map(plan => planToProductSeed(plan, NSL_RATE, validityDays));
 
   let created = 0, updated = 0;
   for (const p of plans) {
-    const [, wasCreated] = await Product.upsert({
-      name: p.name, description: p.description,
-      price_NSL: p.price_NSL,
-      price_usdt: nslToUsdt(p.price_NSL, NSL_RATE),
-      daily_income_NSL: p.daily_income_NSL,
-      validity_days: 60, active: true
-    });
+    const [, wasCreated] = await Product.upsert(p);
     wasCreated ? created++ : updated++;
   }
-  res.json({ message: 'Products seeded', created, updated, total: plans.length });
+  res.json({ message: 'Products seeded', created, updated, total: plans.length, exchange_rate_nsl_per_usdt: NSL_RATE });
 });
 
 // Health Check — always return 200 so Render considers the service healthy

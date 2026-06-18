@@ -6,6 +6,7 @@ const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
 const ps = require('../utils/platformSettings');
 const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
+const { VIP_LEVELS, buildVipBusinessSummary } = require('../utils/productPlans');
 
 // Validation Middleware
 const {
@@ -70,11 +71,23 @@ router.get('/durations', async (req, res) => {
   }
 });
 
+// Admin: review VIP product business math using the current rate and fee settings
+router.get('/business-summary', authenticate, authorize(['superadmin', 'admin', 'finance']), async (req, res) => {
+  try {
+    const settings = await ps.getAll();
+    const nslPerUsdt = await getNslPerUsdt();
+    res.json(buildVipBusinessSummary(settings, nslPerUsdt));
+  } catch (error) {
+    logger.error('Product business summary error:', error);
+    res.status(500).json({ message: 'Error building product business summary' });
+  }
+});
+
 // 3-level referral commission on every product purchase (fire-and-forget)
 async function payPurchaseReferrals(buyer, investedNSL) {
   const s = await ps.getAll();
   const pcts = [s.referral_l1_pct, s.referral_l2_pct, s.referral_l3_pct];
-  const rate = s.exchange_rate_nsl_per_usdt;
+  const rate = await getNslPerUsdt();
   let currentCode = buyer.referred_by;
   for (let level = 0; level < pcts.length; level++) {
     if (!currentCode) break;
@@ -108,6 +121,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
 
     // Load platform duration settings
     const s = await ps.getAll();
+    const nslPerUsdt = await getNslPerUsdt();
     const durationMap = {
       short: s.dur_short,
       week:  s.dur_week,
@@ -143,7 +157,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
       const purchaseDate = new Date();
       const expiresAt = new Date(purchaseDate.getTime() + chosenDays * 24 * 60 * 60 * 1000);
       user.balance_NSL -= product.price_NSL;
-      user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, s.exchange_rate_nsl_per_usdt);
+      user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, nslPerUsdt);
 
       await UserProduct.create({
         user_id: user.id, product_id: product.id,
@@ -156,16 +170,15 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
         include: [{ model: Product, as: 'product', attributes: ['name'] }],
         transaction: t,
       });
-      const vipLevels = ['VIP1','VIP2','VIP3','VIP4','VIP5','VIP6','VIP7','VIP8','VIP9'];
       let highestVip = 'none';
       for (const up of activeUserProducts) {
-        if (up.product && vipLevels.indexOf(up.product.name) > vipLevels.indexOf(highestVip)) highestVip = up.product.name;
+        if (up.product && VIP_LEVELS.indexOf(up.product.name) > VIP_LEVELS.indexOf(highestVip)) highestVip = up.product.name;
       }
       user.vip_level = highestVip;
       await user.save({ transaction: t });
 
       await Transaction.create({
-        user_id: user.id, type: 'purchase', amount_NSL: product.price_NSL, amount_usdt: nslToUsdt(product.price_NSL, s.exchange_rate_nsl_per_usdt),
+        user_id: user.id, type: 'purchase', amount_NSL: product.price_NSL, amount_usdt: nslToUsdt(product.price_NSL, nslPerUsdt),
         product_id: product.id, status: 'approved',
         notes: `Purchased ${product.name} (${chosenDays} days) — expires ${expiresAt.toLocaleDateString()}`,
       }, { transaction: t });

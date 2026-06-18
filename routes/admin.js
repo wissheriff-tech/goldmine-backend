@@ -14,6 +14,7 @@ const {
   syncUsdtBalanceFromNsl
 } = require('../utils/currencyConversion');
 const { syncUserUsdtBalances } = require('../utils/balanceSync');
+const { refreshExchangeRate } = require('../utils/exchangeRateProvider');
 
 // Validation and Security Middleware
 const {
@@ -1350,6 +1351,26 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
   } catch (err) {
     logger.error('Platform settings save error:', err);
     res.status(500).json({ message: 'Error saving platform settings' });
+  }
+});
+
+router.post('/exchange-rate/refresh', authenticate, authorize(['superadmin', 'finance']), adminLimiter, async (req, res) => {
+  try {
+    const snapshot = await refreshExchangeRate({ force: true, updatedBy: req.user.id });
+    logger.info(`Exchange rate refresh by ${req.user.phone}: rate=${snapshot.rate}, source=${snapshot.source}, fallback=${snapshot.fallback}`);
+    res.json({
+      success: true,
+      message: snapshot.fallback ? 'Using saved exchange rate fallback' : 'Exchange rate refreshed',
+      exchange_rate_nsl_per_usdt: snapshot.rate,
+      source: snapshot.source,
+      provider: snapshot.provider,
+      provider_updated_at: snapshot.provider_updated_at,
+      provider_next_update_at: snapshot.provider_next_update_at,
+      fallback: snapshot.fallback,
+    });
+  } catch (err) {
+    logger.error('Exchange rate refresh error:', err);
+    res.status(500).json({ message: 'Error refreshing exchange rate' });
   }
 });
 

@@ -14,6 +14,7 @@ const {
   nslToUsdt,
   syncUsdtBalanceFromNsl
 } = require('../utils/currencyConversion');
+const { getExchangeRateSnapshot } = require('../utils/exchangeRateProvider');
 
 // Validation Middleware
 const {
@@ -29,7 +30,7 @@ const router = express.Router();
 async function payReferralCommissions(depositor, amountNSL) {
   const s = await ps.getAll();
   const pcts = [s.referral_l1_pct, s.referral_l2_pct, s.referral_l3_pct];
-  const rate = s.exchange_rate_nsl_per_usdt;
+  const rate = await getNslPerUsdt();
   let currentCode = depositor.referred_by;
 
   for (let level = 0; level < pcts.length; level++) {
@@ -64,12 +65,18 @@ async function payReferralCommissions(depositor, amountNSL) {
 // Public: NSL/USDT exchange rate
 router.get('/nsl-rate', async (req, res) => {
   try {
-    const nslPerUsdt = await getNslPerUsdt();
+    const snapshot = await getExchangeRateSnapshot();
+    const nslPerUsdt = snapshot.rate;
     res.json({
       nsl_per_usdt: nslPerUsdt,
       usdt_per_nsl: parseFloat((1 / nslPerUsdt).toFixed(6)),
       base_currency: 'USDT',
-      local_currency: 'NSL'
+      local_currency: 'NSL',
+      source: snapshot.source,
+      provider: snapshot.provider,
+      provider_updated_at: snapshot.provider_updated_at,
+      provider_next_update_at: snapshot.provider_next_update_at,
+      fallback: snapshot.fallback,
     });
   } catch (error) {
     logger.error('NSL rate fetch error:', error);
