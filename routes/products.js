@@ -5,6 +5,7 @@ const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
 const ps = require('../utils/platformSettings');
+const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 
 // Validation Middleware
 const {
@@ -24,7 +25,7 @@ const INVITATION_DURATION_KEYS = new Set(['month', 'promo']);
 
 const productWithRate = (product, nslPerUsdt) => {
   const data = product.toJSON ? product.toJSON() : { ...product };
-  data.price_usdt = parseFloat((parseFloat(data.price_NSL || 0) / nslPerUsdt).toFixed(2));
+  data.price_usdt = nslToUsdt(data.price_NSL, nslPerUsdt);
   data.exchange_rate_nsl_per_usdt = nslPerUsdt;
   return data;
 };
@@ -39,7 +40,7 @@ const buildDurationOptions = (settings) => ([
 // Get all products
 router.get('/', async (req, res) => {
   try {
-    const nslPerUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    const nslPerUsdt = await getNslPerUsdt();
     const products = await Product.findAll({ where: { active: true } });
     res.json(products.map(product => productWithRate(product, nslPerUsdt)));
   } catch (error) {
@@ -73,6 +74,7 @@ router.get('/durations', async (req, res) => {
 async function payPurchaseReferrals(buyer, investedNSL) {
   const s = await ps.getAll();
   const pcts = [s.referral_l1_pct, s.referral_l2_pct, s.referral_l3_pct];
+  const rate = s.exchange_rate_nsl_per_usdt;
   let currentCode = buyer.referred_by;
   for (let level = 0; level < pcts.length; level++) {
     if (!currentCode) break;
@@ -82,10 +84,11 @@ async function payPurchaseReferrals(buyer, investedNSL) {
     if (commission > 0) {
       await sequelize.transaction(async (t) => {
         referrer.balance_NSL = parseFloat(referrer.balance_NSL) + commission;
+        referrer.balance_usdt = syncUsdtBalanceFromNsl(referrer.balance_NSL, rate);
         await referrer.save({ transaction: t });
         await Transaction.create({
           user_id: referrer.id, type: 'referral_bonus',
-          amount_NSL: commission, amount_usdt: 0, status: 'approved',
+          amount_NSL: commission, amount_usdt: nslToUsdt(commission, rate), status: 'approved',
           payment_method: 'manual',
           notes: `L${level + 1} referral commission (${pcts[level]}%) from ${buyer.phone || buyer.id} purchase of ${investedNSL} NSL`,
           approved_at: new Date(),
@@ -140,6 +143,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
       const purchaseDate = new Date();
       const expiresAt = new Date(purchaseDate.getTime() + chosenDays * 24 * 60 * 60 * 1000);
       user.balance_NSL -= product.price_NSL;
+      user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, s.exchange_rate_nsl_per_usdt);
 
       await UserProduct.create({
         user_id: user.id, product_id: product.id,
@@ -161,7 +165,7 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
       await user.save({ transaction: t });
 
       await Transaction.create({
-        user_id: user.id, type: 'purchase', amount_NSL: product.price_NSL, amount_usdt: parseFloat((product.price_NSL / (s.exchange_rate_nsl_per_usdt || 23.99)).toFixed(2)),
+        user_id: user.id, type: 'purchase', amount_NSL: product.price_NSL, amount_usdt: nslToUsdt(product.price_NSL, s.exchange_rate_nsl_per_usdt),
         product_id: product.id, status: 'approved',
         notes: `Purchased ${product.name} (${chosenDays} days) — expires ${expiresAt.toLocaleDateString()}`,
       }, { transaction: t });
@@ -196,10 +200,8 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
 router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateCreateProduct, async (req, res) => {
   try {
     const { name, price_NSL, daily_income_NSL, validity_days, description, benefits } = req.body;
-    const NSL_RATE = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-    const price_usdt = req.body.price_usdt != null
-      ? parseFloat(req.body.price_usdt)
-      : parseFloat((price_NSL / NSL_RATE).toFixed(2));
+    const NSL_RATE = await getNslPerUsdt();
+    const price_usdt = nslToUsdt(price_NSL, NSL_RATE);
 
     const productExists = await Product.findOne({ where: { name } });
     if (productExists) {
@@ -234,10 +236,8 @@ router.post('/', authenticate, authorize(['superadmin', 'admin']), adminLimiter,
 router.patch('/:id', authenticate, authorize(['superadmin', 'admin']), adminLimiter, validateUpdateProduct, async (req, res) => {
   try {
     const { price_NSL, daily_income_NSL, validity_days, active, description, benefits } = req.body;
-    const NSL_RATE = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-    const price_usdt = req.body.price_usdt != null
-      ? parseFloat(req.body.price_usdt)
-      : (price_NSL != null ? parseFloat((price_NSL / NSL_RATE).toFixed(2)) : undefined);
+    const NSL_RATE = await getNslPerUsdt();
+    const price_usdt = price_NSL != null ? nslToUsdt(price_NSL, NSL_RATE) : undefined;
 
     const updates = {};
     if (price_NSL       !== undefined) updates.price_NSL       = price_NSL;

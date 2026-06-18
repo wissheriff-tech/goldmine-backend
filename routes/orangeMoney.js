@@ -9,6 +9,7 @@ const { assertImageMagicBytes } = require('../middleware/upload');
 const logger  = require('../utils/logger');
 const { FEE } = require('../config/constants');
 const ps = require('../utils/platformSettings');
+const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 const { put: blobPut } = require('@vercel/blob');
 const isVercel = process.env.VERCEL === '1';
 
@@ -131,14 +132,16 @@ router.post('/withdraw', authenticate, transactionLimiter, async (req, res) => {
 
     // Deduct balance and create pending transaction immediately
     await sequelize.transaction(async (t) => {
+      const rate = await getNslPerUsdt();
       user.balance_NSL = parseFloat(user.balance_NSL) - nsl;
+      user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
       await user.save({ transaction: t });
 
       await Transaction.create({
         user_id:            user.id,
         type:               'withdrawal',
         amount_NSL:         nsl,
-        amount_usdt:        0,
+        amount_usdt:        nslToUsdt(nsl, rate),
         status:             'pending',
         payment_method:     'orange_money',
         notes:              orderId,

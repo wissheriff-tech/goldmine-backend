@@ -10,6 +10,7 @@ const dotenv = require('dotenv');
 const logger = require('./utils/logger');
 const emailService = require('./utils/emailService');
 const ps = require('./utils/platformSettings');
+const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('./utils/currencyConversion');
 const { Op } = require('sequelize');
 
 // Security middleware
@@ -354,7 +355,7 @@ app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
 }, async (req, res) => {
 
   const Product = require('./models/Product');
-  const NSL_RATE = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+  const NSL_RATE = await getNslPerUsdt();
   const plans = [
     { name: 'VIP0', price_NSL: 500,     daily_income_NSL: 15,    description: 'Starter package — begin your journey with minimal risk.' },
     { name: 'VIP1', price_NSL: 1000,    daily_income_NSL: 40,    description: 'Entry-level package with steady daily returns.' },
@@ -373,7 +374,7 @@ app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
     const [, wasCreated] = await Product.upsert({
       name: p.name, description: p.description,
       price_NSL: p.price_NSL,
-      price_usdt: (p.price_NSL / NSL_RATE).toFixed(2),
+      price_usdt: nslToUsdt(p.price_NSL, NSL_RATE),
       daily_income_NSL: p.daily_income_NSL,
       validity_days: 60, active: true
     });
@@ -403,6 +404,7 @@ if (!isVercel) {
   try {
     logger.info('Running daily income cron job...');
     const { User, UserProduct, Product, Transaction } = require('./models');
+    const nslRate = await getNslPerUsdt();
 
     const userProducts = await UserProduct.findAll({
       where: { is_active: true },
@@ -430,6 +432,7 @@ if (!isVercel) {
           user_id: userId,
           type: 'income',
           amount_NSL: dailyIncome,
+          amount_usdt: nslToUsdt(dailyIncome, nslRate),
           product_id: up.product_id,
           status: 'approved',
           notes: `Daily income from ${up.product.name}`
@@ -441,6 +444,7 @@ if (!isVercel) {
     for (const [userId, data] of Object.entries(userIncomes)) {
       if (data.total > 0) {
         data.user.balance_NSL = parseFloat(data.user.balance_NSL) + data.total;
+        data.user.balance_usdt = syncUsdtBalanceFromNsl(data.user.balance_NSL, nslRate);
         await data.user.save();
         totalIncomeGenerated += data.total;
         totalUsersProcessed++;
@@ -464,7 +468,7 @@ cron.schedule('1 0 * * *', async () => {
   try {
     logger.info('Running auto-renewal cron job...');
     const { User, UserProduct, Product, Transaction } = require('./models');
-    const nslRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    const nslRate = await getNslPerUsdt();
 
     const now = new Date();
     const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000);
@@ -490,13 +494,14 @@ cron.schedule('1 0 * * *', async () => {
 
         if (parseFloat(user.balance_NSL) >= product.price_NSL) {
           user.balance_NSL = parseFloat(user.balance_NSL) - product.price_NSL;
+          user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, nslRate);
           up.expires_at = new Date(up.expires_at.getTime() + (product.validity_days * 24 * 60 * 60 * 1000));
 
           await Transaction.create({
             user_id: user.id,
             type: 'renewal',
             amount_NSL: product.price_NSL,
-            amount_usdt: parseFloat((product.price_NSL / nslRate).toFixed(2)),
+            amount_usdt: nslToUsdt(product.price_NSL, nslRate),
             product_id: product.id,
             status: 'approved',
             notes: `Auto-renewal of ${product.name} for ${product.validity_days} days`

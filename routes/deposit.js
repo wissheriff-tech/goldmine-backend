@@ -11,6 +11,7 @@ const { DepositProof, User, Transaction, PaymentSetting, sequelize } = require('
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const ps = require('../utils/platformSettings');
+const { getNslPerUsdt, usdtToNsl, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 const { put: blobPut } = require('@vercel/blob');
 const isVercel = process.env.VERCEL === '1';
 
@@ -245,10 +246,10 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
       }
 
       const amount = parseFloat(approved_amount || proof.user_submitted_amount);
-      const nslRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+      const nslRate = await getNslPerUsdt();
       const feePercent = await ps.get('recharge_fee_pct');
       const amountAfterFee = amount * (1 - feePercent / 100);
-      const nslAmount = amountAfterFee * nslRate;
+      const nslAmount = usdtToNsl(amountAfterFee, nslRate);
 
       // Lock the user row as well to prevent concurrent balance updates
       const user = await User.findOne({
@@ -274,6 +275,7 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
 
       // Credit balance inside the same transaction
       user.balance_NSL = parseFloat(user.balance_NSL) + nslAmount;
+      user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, nslRate);
       await user.save({ transaction: t });
 
       await Transaction.create({
@@ -282,10 +284,10 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
         amount_NSL: nslAmount,
         amount_usdt: amount,
         status: 'approved',
-        notes: `Deposit approved. ${amount} USDT → ${nslAmount.toFixed(4)} NSL (${feePercent}% fee)`
+        notes: `Deposit approved. ${amount} USDT -> ${nslAmount.toFixed(4)} NSL (${feePercent}% fee, rate ${nslRate} NSL per USDT)`
       }, { transaction: t });
 
-      nslAmountResult = { nslAmount, user, amount, feePercent };
+      nslAmountResult = { nslAmount, user, amount, feePercent, nslRate };
       logger.info(`Deposit ${proof.id} approved for user ${user.username}: ${amount} USDT → ${nslAmount} NSL`);
     });
 
@@ -296,7 +298,13 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
         .catch(err => logger.error('Deposit approval email failed:', err));
     }
 
-    res.json({ success: true, message: 'Deposit approved and balance credited', nsl_credited: nslAmountResult.nslAmount });
+    res.json({
+      success: true,
+      message: 'Deposit approved and balance credited',
+      nsl_credited: nslAmountResult.nslAmount,
+      usdt_approved: nslAmountResult.amount,
+      exchange_rate_nsl_per_usdt: nslAmountResult.nslRate
+    });
   } catch (error) {
     logger.error('Deposit approve error:', error);
     const status = error.status || 500;

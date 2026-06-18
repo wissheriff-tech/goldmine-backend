@@ -7,6 +7,12 @@ const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const ps = require('../utils/platformSettings');
 const notificationService = require('../utils/notificationService');
+const {
+  buildConversion,
+  getNslPerUsdt,
+  nslToUsdt,
+  syncUsdtBalanceFromNsl
+} = require('../utils/currencyConversion');
 
 // Validation and Security Middleware
 const {
@@ -23,7 +29,7 @@ const { adminLimiter, resetLimitsForIP } = require('../middleware/security');
 
 const router = express.Router();
 
-const priceUsdtForNsl = (priceNSL, rate) => (parseFloat(priceNSL || 0) / rate).toFixed(2);
+const priceUsdtForNsl = (priceNSL, rate) => nslToUsdt(priceNSL, rate);
 const productWithRate = (product, rate) => {
   const data = product.toJSON ? product.toJSON() : { ...product };
   data.price_usdt = parseFloat(priceUsdtForNsl(data.price_NSL, rate));
@@ -219,7 +225,8 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin', 'admin
   try {
     const { action, currency, amount, reason } = req.body;
     const numericAmount = parseFloat(amount);
-    const balanceField = currency === 'USDT' ? 'balance_usdt' : 'balance_NSL';
+    const rate = await getNslPerUsdt();
+    const conversion = buildConversion(numericAmount, currency, rate);
 
     const result = await sequelize.transaction(async (t) => {
       const user = await User.findOne({
@@ -240,27 +247,28 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin', 'admin
         throw forbidden;
       }
 
-      const currentBalance = parseFloat(user[balanceField]) || 0;
-      const signedAmount = action === 'deduct' ? -numericAmount : numericAmount;
-      const nextBalance = currentBalance + signedAmount;
+      const currentBalance = parseFloat(user.balance_NSL) || 0;
+      const signedAmountNSL = action === 'deduct' ? -conversion.amount_NSL : conversion.amount_NSL;
+      const nextBalance = currentBalance + signedAmountNSL;
 
       if (nextBalance < 0) {
-        const insufficient = new Error(`Insufficient ${currency} balance to deduct this amount`);
+        const insufficient = new Error(`Insufficient NSL balance to deduct this amount`);
         insufficient.statusCode = 400;
         throw insufficient;
       }
 
-      user[balanceField] = nextBalance;
+      user.balance_NSL = nextBalance;
+      user.balance_usdt = syncUsdtBalanceFromNsl(nextBalance, rate);
       await user.save({ transaction: t });
 
       await Transaction.create({
         user_id: user.id,
         type: action === 'add' ? 'recharge' : 'withdrawal',
-        amount_NSL: currency === 'NSL' ? numericAmount : 0,
-        amount_usdt: currency === 'USDT' ? numericAmount : 0,
+        amount_NSL: conversion.amount_NSL,
+        amount_usdt: conversion.amount_usdt,
         status: 'approved',
         approved_by: req.user.id,
-        notes: `Manual ${action === 'add' ? 'credit' : 'deduction'} by ${req.user.role}: ${reason}`,
+        notes: `Manual ${action === 'add' ? 'credit' : 'deduction'} by ${req.user.role}: ${reason} (${conversion.amount_NSL} NSL / ${conversion.amount_usdt} USDT at ${conversion.exchange_rate_nsl_per_usdt} NSL per USDT)`,
         completed_at: new Date(),
         approved_at: new Date()
       }, { transaction: t });
@@ -269,7 +277,7 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin', 'admin
         user,
         previousBalance: currentBalance,
         newBalance: nextBalance,
-        signedAmount
+        signedAmount: signedAmountNSL
       };
     });
 
@@ -297,6 +305,9 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin', 'admin
         action,
         currency,
         amount: numericAmount,
+        amount_NSL: conversion.amount_NSL,
+        amount_usdt: conversion.amount_usdt,
+        exchange_rate_nsl_per_usdt: conversion.exchange_rate_nsl_per_usdt,
         previous_balance: result.previousBalance,
         new_balance: result.newBalance
       }
@@ -566,7 +577,7 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
 // Admin: Get all products
 router.get('/products', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const rate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    const rate = await getNslPerUsdt();
     const products = await Product.findAll({
       order: [['price_NSL', 'ASC']]
     });
@@ -584,7 +595,7 @@ router.get('/products', authenticate, authorize(['superadmin', 'admin']), async 
 // Admin: Get product statistics
 router.get('/products/stats', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
-    const rate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+    const rate = await getNslPerUsdt();
     const products = await Product.findAll();
     const stats = [];
 
@@ -664,8 +675,8 @@ router.post('/products', authenticate, authorize(['superadmin', 'admin']), async
     }
 
     // Calculate USDT price
-    const nslToUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-    const price_usdt = priceUsdtForNsl(price_NSL, nslToUsdt);
+    const nslPerUsdt = await getNslPerUsdt();
+    const price_usdt = priceUsdtForNsl(price_NSL, nslPerUsdt);
 
     const product = await Product.create({
       name,
@@ -703,8 +714,8 @@ router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), 
     if (validity_days   !== undefined) updates.validity_days = validity_days;
 
     if (updates.price_NSL) {
-      const nslToUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-      updates.price_usdt = priceUsdtForNsl(updates.price_NSL, nslToUsdt);
+      const nslPerUsdt = await getNslPerUsdt();
+      updates.price_usdt = priceUsdtForNsl(updates.price_NSL, nslPerUsdt);
     }
 
     const [affectedRows] = await Product.update(updates, { where: { id } });
@@ -836,8 +847,8 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
   try {
     const { name, price_NSL, daily_income_NSL, validity_days, description, is_active } = req.body;
 
-    const nslToUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-    const price_usdt = priceUsdtForNsl(price_NSL, nslToUsdt);
+    const nslPerUsdt = await getNslPerUsdt();
+    const price_usdt = priceUsdtForNsl(price_NSL, nslPerUsdt);
 
     const [affectedRows] = await Product.update(
       {
@@ -1204,10 +1215,15 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
         const user = await User.findOne({ where: { id: tx.user_id }, lock: t.LOCK.UPDATE, transaction: t });
         if (!user) { const e = new Error('User not found'); e.status = 404; throw e; }
 
+        const rate = await getNslPerUsdt();
         user.balance_NSL = parseFloat(user.balance_NSL) + creditNSL;
+        user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
+        tx.amount_NSL = creditNSL;
+        tx.amount_usdt = nslToUsdt(creditNSL, rate);
+        await tx.save({ transaction: t });
         await user.save({ transaction: t });
 
-        result = { txType: 'deposit', creditNSL, user, baseNSL, feePercent };
+        result = { txType: 'deposit', creditNSL, user, baseNSL, feePercent, rate };
         logger.info(`Deposit ${tx.id} approved by admin ${req.user.username}: ${baseNSL} NSL → ${creditNSL} credited to user ${user.username}`);
       }
     });
@@ -1228,7 +1244,13 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
       res.json({
         success: true,
         message: `Approved. ${result.creditNSL.toFixed(0)} NSL credited (${result.feePercent}% fee applied).`,
-        data: { credited_NSL: result.creditNSL, new_balance: result.user.balance_NSL },
+        data: {
+          credited_NSL: result.creditNSL,
+          credited_usdt: nslToUsdt(result.creditNSL, result.rate),
+          exchange_rate_nsl_per_usdt: result.rate,
+          new_balance: result.user.balance_NSL,
+          new_balance_usdt: result.user.balance_usdt
+        },
       });
     }
   } catch (error) {
@@ -1265,7 +1287,9 @@ router.patch('/transaction/:id/reject', authenticate, authorize(['superadmin', '
           // Recover gross amount from notes; fall back to amount_NSL (net)
           const grossMatch = (tx.notes || '').match(/Withdrawal:\s*([\d.]+)\s*NSL/);
           const refundNSL = grossMatch ? parseFloat(grossMatch[1]) : parseFloat(tx.amount_NSL);
+          const rate = await getNslPerUsdt();
           user.balance_NSL = parseFloat(user.balance_NSL) + refundNSL;
+          user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
           await user.save({ transaction: t });
           logger.info(`Withdrawal ${tx.id} rejected; refunded ${refundNSL} NSL to user ${tx.user_id}`);
         }

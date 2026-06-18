@@ -12,6 +12,7 @@ const Session = require('../models/Session');
 const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
+const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 const { profileUpload, paymentUpload, kycUpload, assertImageMagicBytes, assertDocumentMagicBytes } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs');
@@ -179,8 +180,8 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
     }
 
     // Calculate amount_usdt as a number, not string
-    const conversionRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-    const amount_usdt = parseFloat((amountNSL / conversionRate).toFixed(2));
+    const conversionRate = await getNslPerUsdt();
+    const amount_usdt = nslToUsdt(amountNSL, conversionRate);
 
     const transaction = await Transaction.create({
       user_id: user.id,
@@ -202,6 +203,7 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
         id: transaction.id,
         amount_NSL: amountNSL,
         amount_usdt,
+        exchange_rate_nsl_per_usdt: conversionRate,
         status: 'pending',
         payment_method,
         timestamp: transaction.timestamp
@@ -245,8 +247,8 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
       netAmount = amount_NSL - withdrawalFee;
     }
 
-    const conversionRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-    const amount_usdt = (netAmount / conversionRate).toFixed(2);
+    const conversionRate = await getNslPerUsdt();
+    const amount_usdt = nslToUsdt(netAmount, conversionRate);
 
     res.json({
       requested_amount_NSL: amount_NSL,
@@ -258,6 +260,7 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
       },
       net_amount_NSL: netAmount.toFixed(2),
       net_amount_usdt: amount_usdt,
+      exchange_rate_nsl_per_usdt: conversionRate,
       conversion_rate: `1 USDT = ${conversionRate.toFixed(2)} NSL`
     });
   } catch (error) {
@@ -310,11 +313,12 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
         throw e;
       }
 
-      const conversionRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-      const amount_usdt = (netAmount / conversionRate).toFixed(2);
+      const conversionRate = await getNslPerUsdt();
+      const amount_usdt = nslToUsdt(netAmount, conversionRate);
 
       // Deduct balance atomically — prevents double-spend if two requests race
       user.balance_NSL = parseFloat(user.balance_NSL) - amount_NSL;
+      user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, conversionRate);
       await user.save({ transaction: t });
 
       const tx = await Transaction.create({
@@ -331,10 +335,10 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
 
       logger.info(`Withdrawal requested: ${user.phone || user.id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
 
-      result = { tx, user, withdrawalFee, netAmount, amount_usdt };
+      result = { tx, user, withdrawalFee, netAmount, amount_usdt, conversionRate };
     });
 
-    const { tx, user, withdrawalFee, netAmount, amount_usdt } = result;
+    const { tx, user, withdrawalFee, netAmount, amount_usdt, conversionRate } = result;
     res.status(201).json({
       message: 'Withdrawal request submitted! Finance admin will process your withdrawal within 24 hours.',
       transaction: {
@@ -343,6 +347,7 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
         fee_NSL: withdrawalFee.toFixed(2),
         net_amount_NSL: netAmount.toFixed(2),
         amount_usdt,
+        exchange_rate_nsl_per_usdt: conversionRate,
         withdrawal_address,
         network: network || 'BSC',
         status: 'pending',

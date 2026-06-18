@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
+const { buildConversion, getNslPerUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 
 const router = express.Router();
 
@@ -117,13 +118,19 @@ router.post('/users/add-currency', authenticate, authorize(['superadmin', 'admin
       return res.status(400).json({ message: 'Reason must be at least 5 characters' });
     }
 
+    const hasNSL = amount_NSL !== undefined && amount_NSL !== null && Number(amount_NSL) > 0;
+    const hasUSDT = amount_usdt !== undefined && amount_usdt !== null && Number(amount_usdt) > 0;
+    const rate = await getNslPerUsdt();
+    const conversion = hasUSDT && !hasNSL
+      ? buildConversion(amount_usdt, 'USDT', rate)
+      : buildConversion(amount_NSL, 'NSL', rate);
+
+    if (conversion.amount_NSL <= 0 && conversion.amount_usdt <= 0) {
+      return res.status(400).json({ message: 'Specify a positive NSL or USDT amount' });
+    }
+
     // Use a transaction for atomicity
     const result = await sequelize.transaction(async (t) => {
-      // Increment balances using Sequelize literal for atomic updates
-      const incrementFields = {};
-      if (amount_NSL) incrementFields.balance_NSL = parseFloat(amount_NSL);
-      if (amount_usdt) incrementFields.balance_usdt = parseFloat(amount_usdt);
-
       // Update each user's balance atomically
       const users = await User.findAll({
         where: { id: { [Op.in]: user_ids } },
@@ -131,8 +138,8 @@ router.post('/users/add-currency', authenticate, authorize(['superadmin', 'admin
       });
 
       for (const user of users) {
-        if (amount_NSL) user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(amount_NSL);
-        if (amount_usdt) user.balance_usdt = (parseFloat(user.balance_usdt) || 0) + parseFloat(amount_usdt);
+        user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + conversion.amount_NSL;
+        user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
         user.updated_at = new Date();
         await user.save({ transaction: t });
       }
@@ -141,11 +148,11 @@ router.post('/users/add-currency', authenticate, authorize(['superadmin', 'admin
       const transactions = user_ids.map(userId => ({
         user_id: userId,
         type: 'recharge',
-        amount_NSL: amount_NSL || 0,
-        amount_usdt: amount_usdt || 0,
+        amount_NSL: conversion.amount_NSL,
+        amount_usdt: conversion.amount_usdt,
         status: 'approved',
         approved_by: req.user.id,
-        notes: `Batch currency addition: ${reason}`,
+        notes: `Batch currency addition: ${reason} (${conversion.amount_NSL} NSL / ${conversion.amount_usdt} USDT at ${conversion.exchange_rate_nsl_per_usdt} NSL per USDT)`,
         completed_at: new Date()
       }));
 
@@ -159,11 +166,11 @@ router.post('/users/add-currency', authenticate, authorize(['superadmin', 'admin
       user_ids,
       'transaction_approved',
       'Currency Added',
-      `${amount_NSL || 0} NSL has been added to your account. ${reason}`,
+      `${conversion.amount_NSL} NSL (${conversion.amount_usdt} USDT) has been added to your account. ${reason}`,
       { priority: 'high', icon: '💰' }
     );
 
-    logger.info(`Batch currency addition by ${req.user.phone}: ${user_ids.length} users received ${amount_NSL} NSL`);
+    logger.info(`Batch currency addition by ${req.user.phone}: ${user_ids.length} users received ${conversion.amount_NSL} NSL (${conversion.amount_usdt} USDT at ${rate})`);
 
     res.json({
       message: 'Batch currency addition successful',
@@ -259,7 +266,9 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
           if (!user) throw new Error('User not found');
 
           if (lockedTx.type === 'recharge') {
+            const rate = await getNslPerUsdt();
             user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(lockedTx.amount_NSL);
+            user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
           }
           // withdrawal: balance already deducted at submission time — no change needed here
 

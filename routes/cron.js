@@ -6,6 +6,7 @@ const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
 const ps = require('../utils/platformSettings');
+const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 
 const router = express.Router();
 
@@ -38,7 +39,7 @@ async function recalcVipLevel(userId, t) {
 // ── Job: Daily Income ─────────────────────────────────────────────────────
 async function runDailyIncome() {
   const now = new Date();
-  const nslRate = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
+  const nslRate = await getNslPerUsdt();
   const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
   const todayEnd   = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
 
@@ -71,7 +72,7 @@ async function runDailyIncome() {
       user_id: up.user_id,
       type: 'income',
       amount_NSL: income,
-      amount_usdt: parseFloat((income / nslRate).toFixed(4)),
+      amount_usdt: nslToUsdt(income, nslRate),
       product_id: up.product_id,
       status: 'approved',
       notes: `Daily income from ${up.product.name}`,
@@ -87,6 +88,7 @@ async function runDailyIncome() {
       async (t) => {
         const user = await User.findOne({ where: { id: data.user.id }, lock: t.LOCK.UPDATE, transaction: t });
         user.balance_NSL = parseFloat(user.balance_NSL) + data.total;
+        user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, nslRate);
         await user.save({ transaction: t });
         await Transaction.bulkCreate(data.txs, { transaction: t });
       }
@@ -135,6 +137,7 @@ async function runAutoRenewal() {
             return;
           }
           locked.balance_NSL = parseFloat(locked.balance_NSL) - parseFloat(product.price_NSL);
+          locked.balance_usdt = syncUsdtBalanceFromNsl(locked.balance_NSL, nslRate);
           await locked.save({ transaction: t });
           const newExpiry = new Date(now.getTime() + product.validity_days * 24 * 60 * 60 * 1000);
           up.expires_at = newExpiry;
@@ -143,7 +146,7 @@ async function runAutoRenewal() {
             user_id: user.id,
             type: 'renewal',
             amount_NSL: product.price_NSL,
-            amount_usdt: parseFloat((product.price_NSL / nslRate).toFixed(2)),
+            amount_usdt: nslToUsdt(product.price_NSL, nslRate),
             product_id: product.id,
             status: 'approved',
             notes: `Auto-renewal of ${product.name} — valid until ${newExpiry.toLocaleDateString()}`,

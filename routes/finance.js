@@ -8,6 +8,12 @@ const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
 const { FEE } = require('../config/constants');
 const ps = require('../utils/platformSettings');
+const {
+  buildConversion,
+  getNslPerUsdt,
+  nslToUsdt,
+  syncUsdtBalanceFromNsl
+} = require('../utils/currencyConversion');
 
 // Validation Middleware
 const {
@@ -23,6 +29,7 @@ const router = express.Router();
 async function payReferralCommissions(depositor, amountNSL) {
   const s = await ps.getAll();
   const pcts = [s.referral_l1_pct, s.referral_l2_pct, s.referral_l3_pct];
+  const rate = s.exchange_rate_nsl_per_usdt;
   let currentCode = depositor.referred_by;
 
   for (let level = 0; level < pcts.length; level++) {
@@ -35,12 +42,13 @@ async function payReferralCommissions(depositor, amountNSL) {
 
     await sequelize.transaction(async (t) => {
       referrer.balance_NSL = parseFloat(referrer.balance_NSL) + commission;
+      referrer.balance_usdt = syncUsdtBalanceFromNsl(referrer.balance_NSL, rate);
       await referrer.save({ transaction: t });
       await Transaction.create({
         user_id:        referrer.id,
         type:           'referral_bonus',
         amount_NSL:     commission,
-        amount_usdt:    0,
+        amount_usdt:    nslToUsdt(commission, rate),
         status:         'approved',
         payment_method: 'manual',
         notes:          `L${level + 1} referral commission (${pcts[level]}%) from recharge of ${amountNSL} NSL by user #${depositor.id}`,
@@ -56,8 +64,13 @@ async function payReferralCommissions(depositor, amountNSL) {
 // Public: NSL/USDT exchange rate
 router.get('/nsl-rate', async (req, res) => {
   try {
-    const nslPerUsdt = parseFloat(await ps.get('exchange_rate_nsl_per_usdt')) || 23.99;
-    res.json({ nsl_per_usdt: nslPerUsdt, usdt_per_nsl: parseFloat((1 / nslPerUsdt).toFixed(6)) });
+    const nslPerUsdt = await getNslPerUsdt();
+    res.json({
+      nsl_per_usdt: nslPerUsdt,
+      usdt_per_nsl: parseFloat((1 / nslPerUsdt).toFixed(6)),
+      base_currency: 'USDT',
+      local_currency: 'NSL'
+    });
   } catch (error) {
     logger.error('NSL rate fetch error:', error);
     res.status(500).json({ message: 'Error fetching exchange rate' });
@@ -132,6 +145,7 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
 
       if (transaction.type === 'recharge') {
         const feePct = user.role === 'superadmin' ? 0 : await ps.get('recharge_fee_pct');
+        const rate = await getNslPerUsdt();
         let creditAmount = transaction.amount_NSL;
         let rechargeFee = 0;
         if (feePct > 0) {
@@ -139,6 +153,8 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
           creditAmount = transaction.amount_NSL - rechargeFee;
         }
         user.balance_NSL += creditAmount;
+        user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
+        transaction.amount_usdt = nslToUsdt(transaction.amount_NSL, rate);
         logger.info(`Recharge approved: User ${user.phone}, Amount: ${transaction.amount_NSL} NSL, Fee: ${rechargeFee.toFixed(2)} NSL (${feePct}%), Credited: ${creditAmount.toFixed(2)} NSL`);
         if (rechargeFee > 0) {
           transaction.notes = `${transaction.notes || 'Recharge approved'} - Fee: ${rechargeFee.toFixed(2)} NSL (${feePct}%)`;
@@ -302,8 +318,14 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
   try {
     const { amount_NSL, amount_usdt, reason } = req.body;
 
-    const nsl  = amount_NSL  ? parseFloat(amount_NSL)  : 0;
-    const usdt = amount_usdt ? parseFloat(amount_usdt) : 0;
+    const hasNSL = amount_NSL !== undefined && amount_NSL !== null && Number(amount_NSL) > 0;
+    const hasUSDT = amount_usdt !== undefined && amount_usdt !== null && Number(amount_usdt) > 0;
+    const rate = await getNslPerUsdt();
+    const conversion = hasUSDT && !hasNSL
+      ? buildConversion(amount_usdt, 'USDT', rate)
+      : buildConversion(amount_NSL, 'NSL', rate);
+    const nsl = conversion.amount_NSL;
+    const usdt = conversion.amount_usdt;
 
     if (nsl  > MAX_MANUAL_CREDIT_NSL)  return res.status(400).json({ message: `Single credit cannot exceed ${MAX_MANUAL_CREDIT_NSL.toLocaleString()} NSL` });
     if (usdt > MAX_MANUAL_CREDIT_USDT) return res.status(400).json({ message: `Single credit cannot exceed ${MAX_MANUAL_CREDIT_USDT.toLocaleString()} USDT` });
@@ -312,8 +334,8 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
     const user = await User.findByPk(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    if (nsl  > 0) user.balance_NSL  = parseFloat(user.balance_NSL)  + nsl;
-    if (usdt > 0) user.balance_usdt = parseFloat(user.balance_usdt) + usdt;
+    user.balance_NSL = parseFloat(user.balance_NSL) + nsl;
+    user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
 
     await user.save();
 
@@ -325,11 +347,11 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
       amount_usdt: usdt,
       status: 'approved',
       approved_by: req.user.id,
-      notes: `Currency added by finance: ${reason || 'Manual addition'}`,
+      notes: `Currency added by finance: ${reason || 'Manual addition'} (${conversion.amount_NSL} NSL / ${conversion.amount_usdt} USDT at ${conversion.exchange_rate_nsl_per_usdt} NSL per USDT)`,
       completed_at: new Date()
     });
 
-    logger.info(`Currency added by finance (${req.user.phone}) to user ${user.phone}: NSL=${nsl}, USDT=${usdt}`);
+    logger.info(`Currency added by finance (${req.user.phone}) to user ${user.phone}: NSL=${nsl}, USDT=${usdt}, rate=${rate}`);
 
     res.json({
       message: 'Currency added successfully',
