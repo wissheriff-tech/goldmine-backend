@@ -546,7 +546,7 @@ app.use((req, res) => {
   res.status(404).json({
     success: false,
     message: 'Route not found',
-    path: req.originalUrl
+    ...(process.env.NODE_ENV === 'development' && { path: req.originalUrl })
   });
 });
 
@@ -603,9 +603,11 @@ app.use((err, req, res, next) => {
     });
   }
 
-  // Default error
   const statusCode = err.status || err.statusCode || 500;
-  const message = err.message || 'Internal Server Error';
+  const isClientError = statusCode >= 400 && statusCode < 500;
+  const message = isClientError
+    ? (err.message || 'Request failed')
+    : 'Internal Server Error';
 
   res.status(statusCode).json({
     success: false,
