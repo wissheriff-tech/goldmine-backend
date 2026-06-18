@@ -17,8 +17,6 @@ const ChatMessage = require('./ChatMessage');
 const Notification = require('./Notification');
 const Referral = require('./Referral');
 const TwoFactorAuth = require('./TwoFactorAuth');
-const ExchangeRate = require('./ExchangeRate');
-const CurrencyRate = require('./CurrencyRate');
 const DepositProof = require('./DepositProof');
 const PaymentSetting = require('./PaymentSetting');
 const Testimonial = require('./Testimonial');
@@ -68,12 +66,6 @@ Referral.belongsTo(User, { foreignKey: 'referred_id', as: 'referred' });
 User.hasOne(TwoFactorAuth, { foreignKey: 'user_id', as: 'twoFactorAuth' });
 TwoFactorAuth.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
-// User <-> ExchangeRate (override_set_by)
-ExchangeRate.belongsTo(User, { foreignKey: 'override_set_by', as: 'overrideAdmin' });
-
-// User <-> CurrencyRate (updated_by)
-CurrencyRate.belongsTo(User, { foreignKey: 'updated_by', as: 'updater' });
-
 // User <-> DepositProof
 User.hasMany(DepositProof, { foreignKey: 'user_id', as: 'depositProofs' });
 DepositProof.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
@@ -93,8 +85,6 @@ module.exports = {
   Notification,
   Referral,
   TwoFactorAuth,
-  ExchangeRate,
-  CurrencyRate,
   DepositProof,
   PaymentSetting,
   Testimonial,

@@ -409,24 +409,6 @@ const updateProfileSchema = Joi.object({
     .messages({ 'string.pattern.base': 'profile_photo must be a relative upload path' })
 });
 
-// Currency Rate Schema
-const currencyRateSchema = Joi.object({
-  currency_code: Joi.string()
-    .uppercase()
-    .length(3)
-    .required(),
-
-  currency_name: Joi.string()
-    .required(),
-
-  rate_to_usd: Joi.number()
-    .positive()
-    .required(),
-
-  enabled: Joi.boolean()
-    .default(true)
-});
-
 // Export validation middleware
 module.exports = {
   validate,
@@ -459,8 +441,5 @@ module.exports = {
   validateApproveReject: validate(approveRejectSchema),
 
   // Profile validations
-  validateUpdateProfile: validate(updateProfileSchema),
-
-  // Currency validations
-  validateCurrencyRate: validate(currencyRateSchema)
+  validateUpdateProfile: validate(updateProfileSchema)
 };
