@@ -2,6 +2,7 @@ const express = require('express');
 const { Op } = require('sequelize');
 const { User, UserProduct, Product, Transaction, Session, Notification, sequelize } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
+const { adminLimiter } = require('../middleware/security');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
@@ -108,6 +109,7 @@ async function runDailyIncome() {
 // ── Job: Auto-Renewal ─────────────────────────────────────────────────────
 async function runAutoRenewal() {
   const now = new Date();
+  const nslRate = await getNslPerUsdt();
 
   const expired = await UserProduct.findAll({
     where: { is_active: true, expires_at: { [Op.lte]: now } },
@@ -220,7 +222,7 @@ router.get('/cleanup', cronAuth, async (req, res) => {
 });
 
 // ── POST /api/cron/trigger — admin manual trigger ─────────────────────────
-router.post('/trigger', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
+router.post('/trigger', authenticate, authorize(['superadmin', 'admin']), adminLimiter, async (req, res) => {
   const { job } = req.body;
   const jobs = { 'daily-income': runDailyIncome, 'auto-renewal': runAutoRenewal, 'cleanup': runCleanup };
   if (!jobs[job]) {

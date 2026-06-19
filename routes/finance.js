@@ -35,13 +35,20 @@ async function payReferralCommissions(depositor, amountNSL) {
 
   for (let level = 0; level < pcts.length; level++) {
     if (!currentCode) break;
-    const referrer = await User.findOne({ where: { referral_code: currentCode } });
-    if (!referrer) break;
+    const referrerSnapshot = await User.findOne({ where: { referral_code: currentCode } });
+    if (!referrerSnapshot) break;
 
     const commission = parseFloat((amountNSL * pcts[level] / 100).toFixed(4));
-    if (commission <= 0) { currentCode = referrer.referred_by; continue; }
+    if (commission <= 0) { currentCode = referrerSnapshot.referred_by; continue; }
 
     await sequelize.transaction(async (t) => {
+      const referrer = await User.findOne({
+        where: { id: referrerSnapshot.id },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+      if (!referrer) return;
+
       referrer.balance_NSL = parseFloat(referrer.balance_NSL) + commission;
       referrer.balance_usdt = syncUsdtBalanceFromNsl(referrer.balance_NSL, rate);
       await referrer.save({ transaction: t });
@@ -57,8 +64,8 @@ async function payReferralCommissions(depositor, amountNSL) {
       }, { transaction: t });
     });
 
-    logger.info(`Referral L${level + 1}: +${commission} NSL → user #${referrer.id} (${pcts[level]}% of ${amountNSL})`);
-    currentCode = referrer.referred_by;
+    logger.info(`Referral L${level + 1}: +${commission} NSL -> user #${referrerSnapshot.id} (${pcts[level]}% of ${amountNSL})`);
+    currentCode = referrerSnapshot.referred_by;
   }
 }
 
