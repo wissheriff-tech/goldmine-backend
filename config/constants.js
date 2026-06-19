@@ -56,7 +56,6 @@ module.exports = {
     MAX_FILE_SIZE: 10 * 1024 * 1024, // 10MB
     ALLOWED_IMAGE_TYPES: ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'],
     ALLOWED_DOCUMENT_TYPES: ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'],
-    PROFILE_PHOTO_PATH: 'uploads/profiles',
     DOCUMENT_PATH: 'uploads/documents'
   },
 

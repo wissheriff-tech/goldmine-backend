@@ -67,8 +67,7 @@ router.get('/dashboard', authenticate, async (req, res) => {
         ambassador_sector: user.ambassador_sector,
         status: user.status,
         kyc_verified: user.kyc_verified,
-        created_at: user.created_at,
-        profile_photo: null
+        created_at: user.created_at
       },
       products: userProducts,
       referrals: {
@@ -540,7 +539,6 @@ router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => 
         username: user.username,
         email: user.email,
         phone: user.phone,
-        profile_photo: null,
         updated_at: user.updated_at
       }
     });
@@ -548,11 +546,6 @@ router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => 
     logger.error('Profile update error:', error);
     res.status(500).json({ message: 'Error updating profile', error: error.message });
   }
-});
-
-// Profile photos are disabled. User avatars are generated from account initials.
-router.post('/upload-profile-photo', authenticate, (req, res) => {
-  res.status(410).json({ message: 'Profile photo uploads are disabled. Your account avatar uses your initial.' });
 });
 
 // Upload payment proof for transaction

@@ -32,8 +32,7 @@ const authUserPayload = async (user) => {
     referred_by: user.referred_by,
     ambassador_region: user.ambassador_region,
     ambassador_sector: user.ambassador_sector,
-    twoFactorEnabled: user.twoFactorEnabled,
-    profile_photo: null
+    twoFactorEnabled: user.twoFactorEnabled
   };
 };
 

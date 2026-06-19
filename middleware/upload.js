@@ -82,7 +82,6 @@ const isVercel = process.env.VERCEL === '1';
 
 // Upload directories (only used when NOT on Vercel)
 const uploadDirs = {
-  profiles: path.join(__dirname, '../uploads/profiles'),
   payments: path.join(__dirname, '../uploads/payments'),
   kyc: path.join(__dirname, '../uploads/kyc')
 };
@@ -123,25 +122,13 @@ const documentFilter = (req, file, cb) => {
 };
 
 // Use memory storage on Vercel, disk storage otherwise
-let profileStorage, paymentStorage, kycStorage;
+let paymentStorage, kycStorage;
 
 if (isVercel) {
   // Memory storage for Vercel (files stored in buffer, not on disk)
-  profileStorage = multer.memoryStorage();
   paymentStorage = multer.memoryStorage();
   kycStorage = multer.memoryStorage();
 } else {
-  // Configure disk storage for profile photos
-  profileStorage = multer.diskStorage({
-    destination: function (req, file, cb) {
-      cb(null, uploadDirs.profiles);
-    },
-    filename: function (req, file, cb) {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      cb(null, 'profile-' + req.user.id + '-' + uniqueSuffix + path.extname(file.originalname));
-    }
-  });
-
   // Configure disk storage for payment proofs
   paymentStorage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -167,14 +154,6 @@ if (isVercel) {
 }
 
 // Create multer upload instances
-const profileUpload = multer({
-  storage: profileStorage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB max file size
-  },
-  fileFilter: imageFilter
-});
-
 const paymentUpload = multer({
   storage: paymentStorage,
   limits: {
@@ -192,11 +171,8 @@ const kycUpload = multer({
 });
 
 module.exports = {
-  profileUpload,
   paymentUpload,
   kycUpload,
   assertImageMagicBytes,
   assertDocumentMagicBytes,
-  upload: profileUpload,
-  default: profileUpload,
 };

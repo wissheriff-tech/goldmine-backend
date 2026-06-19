@@ -305,6 +305,7 @@ const initDb = async () => {
       `ALTER TYPE "enum_users_role" ADD VALUE IF NOT EXISTS 'ambassador'`,
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ambassador_region" VARCHAR(100)`,
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ambassador_sector" VARCHAR(100)`,
+      `ALTER TABLE "users" DROP COLUMN IF EXISTS "profile_photo"`,
     ];
     for (const migration of safeMigrations) {
       try {

@@ -136,11 +136,6 @@ const User = sequelize.define('User', {
     type: DataTypes.DATE,
     allowNull: true
   },
-  profile_photo: {
-    type: DataTypes.STRING(500),
-    allowNull: true,
-    defaultValue: null
-  },
   preferred_currency: {
     type: DataTypes.STRING(10),
     defaultValue: 'USD'
