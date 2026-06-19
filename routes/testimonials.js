@@ -5,7 +5,6 @@ const { adminLimiter } = require('../middleware/security');
 
 const router = express.Router();
 
-const MIN_SEEDED_PER_COUNTRY = 100;
 const ACTIVITY_TYPES = ['withdrawal', 'earning', 'deposit', 'withdrawal', 'earning', 'deposit'];
 
 const COUNTRY_CONFIG = [
@@ -20,6 +19,7 @@ const COUNTRY_CONFIG = [
     firstNames: ['Mohamed', 'Fatmata', 'Ibrahim', 'Aminata', 'Abdul', 'Kadiatu', 'Alhaji', 'Mariama', 'Sorie', 'Hawa'],
     lastNames: ['Bangura', 'Kamara', 'Koroma', 'Sesay', 'Conteh', 'Kargbo', 'Mansaray', 'Turay', 'Jalloh', 'Sankoh'],
     ranges: { withdrawal: [1800, 9500], deposit: [1000, 7000], earning: [350, 1800] },
+    seedTarget: 137,
   },
   {
     country: 'Liberia',
@@ -32,6 +32,7 @@ const COUNTRY_CONFIG = [
     firstNames: ['Emmanuel', 'Comfort', 'Varney', 'Nowai', 'Thomas', 'Miatta', 'Joseph', 'Patience', 'Saye', 'Mamie'],
     lastNames: ['Kollie', 'Toe', 'Konneh', 'Flomo', 'Nimba', 'Johnson', 'Wesseh', 'Bility', 'Sherman', 'Dolo'],
     ranges: { withdrawal: [25000, 180000], deposit: [15000, 120000], earning: [2500, 18000] },
+    seedTarget: 118,
   },
   {
     country: 'Togo',
@@ -44,6 +45,20 @@ const COUNTRY_CONFIG = [
     firstNames: ['Kofi', 'Ama', 'Edem', 'Akosua', 'Yao', 'Afi', 'Komlan', 'Abla', 'Kodjo', 'Essi'],
     lastNames: ['Mensah', 'Abalo', 'Agbeko', 'Dossou', 'Kpakpo', 'Adjovi', 'Togbe', 'Amegah', 'Sossou', 'Akakpo'],
     ranges: { withdrawal: [35000, 420000], deposit: [25000, 300000], earning: [5000, 45000] },
+    seedTarget: 126,
+  },
+  {
+    country: 'Ghana',
+    flag: '🇬🇭',
+    currency_code: 'GHS',
+    currency_symbol: 'GH₵',
+    currency_name: 'Ghanaian cedi',
+    phonePrefix: '+233',
+    mobilePrefixes: ['20', '24', '26', '27', '54', '55', '59'],
+    firstNames: ['Kwame', 'Akosua', 'Yaw', 'Ama', 'Kofi', 'Abena', 'Kojo', 'Efua', 'Nana', 'Adwoa'],
+    lastNames: ['Mensah', 'Owusu', 'Boateng', 'Asante', 'Addo', 'Osei', 'Appiah', 'Darko', 'Agyeman', 'Sarpong'],
+    ranges: { withdrawal: [450, 6500], deposit: [300, 4500], earning: [80, 850] },
+    seedTarget: 109,
   },
   {
     country: 'Guinea',
@@ -56,6 +71,7 @@ const COUNTRY_CONFIG = [
     firstNames: ['Mamadou', 'Aminata', 'Ibrahima', 'Fatoumata', 'Alpha', 'Binta', 'Ousmane', 'Mariama', 'Abdoulaye', 'Kadiatou'],
     lastNames: ['Diallo', 'Bah', 'Camara', 'Sow', 'Barry', 'Keita', 'Conte', 'Sylla', 'Toure', 'Kaba'],
     ranges: { withdrawal: [350000, 3500000], deposit: [250000, 2500000], earning: [60000, 420000] },
+    seedTarget: 113,
   },
   {
     country: 'Nigeria',
@@ -68,6 +84,7 @@ const COUNTRY_CONFIG = [
     firstNames: ['Chukwuemeka', 'Ngozi', 'Babatunde', 'Chidinma', 'Emeka', 'Aisha', 'Ifeanyi', 'Zainab', 'Olumide', 'Adaeze'],
     lastNames: ['Obi', 'Okafor', 'Adeyemi', 'Eze', 'Nwosu', 'Bello', 'Okoro', 'Musa', 'Adebayo', 'Ibrahim'],
     ranges: { withdrawal: [45000, 650000], deposit: [30000, 450000], earning: [8000, 85000] },
+    seedTarget: 151,
   },
   {
     country: 'Senegal',
@@ -80,6 +97,7 @@ const COUNTRY_CONFIG = [
     firstNames: ['Moussa', 'Aissatou', 'Ibrahima', 'Khady', 'Ousmane', 'Fatou', 'Cheikh', 'Aminata', 'Mamadou', 'Ndeye'],
     lastNames: ['Diallo', 'Ndiaye', 'Sow', 'Fall', 'Badji', 'Diop', 'Ba', 'Sarr', 'Gueye', 'Faye'],
     ranges: { withdrawal: [40000, 480000], deposit: [25000, 320000], earning: [7000, 50000] },
+    seedTarget: 122,
   },
 ];
 
@@ -103,6 +121,7 @@ const formatPhone = (config, index) => {
   const prefix = config.mobilePrefixes[index % config.mobilePrefixes.length];
   const seed = String(1000000 + ((index * 7919 + 234567) % 9000000));
   if (config.country === 'Nigeria') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 3)} ${seed.slice(3)}`;
+  if (config.country === 'Ghana') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 3)} ${seed.slice(3)}`;
   if (config.country === 'Togo') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 2)} ${seed.slice(2, 4)} ${seed.slice(4, 6)}`;
   if (config.country === 'Senegal') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 3)} ${seed.slice(3, 6)}`;
   if (config.country === 'Guinea') return `${config.phonePrefix} ${prefix} ${seed.slice(0, 2)} ${seed.slice(2, 4)} ${seed.slice(4, 6)}`;
@@ -164,7 +183,7 @@ async function seedIfNeeded() {
     await Testimonial.sync({ alter: false });
     for (const config of COUNTRY_CONFIG) {
       const count = await Testimonial.count({ where: { country: config.country } });
-      const missing = Math.max(0, MIN_SEEDED_PER_COUNTRY - count);
+      const missing = Math.max(0, config.seedTarget - count);
       if (missing > 0) {
         await Testimonial.bulkCreate(buildSeedForCountry(config, count, missing));
       }
