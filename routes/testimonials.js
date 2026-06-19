@@ -93,6 +93,11 @@ const COUNTRY_OPTIONS = COUNTRY_CONFIG.map(({ country, flag, currency_code, curr
 }));
 
 const getCountryConfig = (country) => COUNTRY_BY_NAME.get(String(country || '').trim().toLowerCase()) || null;
+const parsePositiveInt = (value, fallback, max) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
+};
 
 const formatPhone = (config, index) => {
   const prefix = config.mobilePrefixes[index % config.mobilePrefixes.length];
@@ -171,15 +176,39 @@ seedIfNeeded();
 // Public: visible testimonials for user dashboard feed
 router.get('/', async (req, res) => {
   try {
-    const countryConfig = getCountryConfig(req.query.country);
+    const requestedCountry = String(req.query.country || COUNTRY_OPTIONS[0].country).trim();
+    const showAllCountries = requestedCountry.toLowerCase() === 'all';
+    const countryConfig = showAllCountries ? null : getCountryConfig(requestedCountry);
+    const page = parsePositiveInt(req.query.page, 1, 1000);
+    const limit = parsePositiveInt(req.query.limit, 5, 30);
     const where = { visible: true };
     if (countryConfig) where.country = countryConfig.country;
+    if (!showAllCountries && !countryConfig) where.country = COUNTRY_OPTIONS[0].country;
+    const offset = (page - 1) * limit;
+    const total = await Testimonial.count({ where });
     const rows = await Testimonial.findAll({
       where,
       order: [['id', 'ASC']],
+      limit,
+      offset,
     });
-    const testimonials = rows.map(decorateTestimonial).sort(() => Math.random() - 0.5);
-    res.json({ testimonials, countries: COUNTRY_OPTIONS });
+    const testimonials = rows.map(decorateTestimonial);
+    const counts = {};
+    await Promise.all(COUNTRY_OPTIONS.map(async option => {
+      counts[option.country] = await Testimonial.count({ where: { visible: true, country: option.country } });
+    }));
+    res.json({
+      testimonials,
+      countries: COUNTRY_OPTIONS,
+      counts,
+      pagination: {
+        page,
+        limit,
+        total,
+        total_pages: Math.max(1, Math.ceil(total / limit)),
+        country: showAllCountries ? 'all' : (countryConfig?.country || COUNTRY_OPTIONS[0].country),
+      },
+    });
   } catch (err) {
     res.status(500).json({ message: 'Error fetching testimonials', error: err.message });
   }
