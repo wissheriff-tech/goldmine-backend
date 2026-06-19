@@ -35,7 +35,12 @@ const omUpload = multer({
   storage: omStorage,
   limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (!file.mimetype.startsWith('image/')) return cb(new Error('Images only'));
+    const allowedExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+    const allowedMime = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']);
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!allowedMime.has(file.mimetype) || !allowedExts.has(ext)) {
+      return cb(new Error('Only image files (jpg, jpeg, png, gif, webp) are allowed'));
+    }
     cb(null, true);
   }
 });

@@ -47,14 +47,16 @@ const globalLimiter = rateLimit({
  * Authentication Rate Limiter
  */
 const authLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  max: 15,
+  windowMs: 15 * 60 * 1000,
+  max: 8,
   skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: 'Too many authentication attempts. Please try again later.',
   handler: (req, res) => {
     res.status(429).json({
       success: false,
-      message: 'Too many login attempts. Please try again after 5 minutes.',
+      message: 'Too many login attempts. Please try again after 15 minutes.',
       retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
     });
   }
@@ -113,7 +115,9 @@ const financeLimiter = rateLimit({
  */
 const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 5,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: 'Too many password reset attempts.',
   handler: (req, res) => {
     res.status(429).json({
@@ -130,7 +134,9 @@ const passwordResetLimiter = rateLimit({
  */
 const signupLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
   skipSuccessfulRequests: false,
   message: 'Too many accounts created from this IP.',
   handler: (req, res) => {

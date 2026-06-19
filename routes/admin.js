@@ -15,6 +15,7 @@ const {
 } = require('../utils/currencyConversion');
 const { syncUserUsdtBalances } = require('../utils/balanceSync');
 const { refreshExchangeRate } = require('../utils/exchangeRateProvider');
+const { recordAdminAudit } = require('../utils/adminAudit');
 
 // Validation and Security Middleware
 const {
@@ -158,6 +159,14 @@ router.patch('/users/:id/role', authenticate, authorize(['superadmin']), adminLi
       { priority: 'high', data: { role, ambassador_region, ambassador_sector, updated_by: req.user.id } }
     ));
 
+    await recordAdminAudit(req, {
+      action: 'user.role.update',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { role, ambassador_region, ambassador_sector },
+    });
+
     res.json({
       message: 'User role updated',
       user
@@ -211,6 +220,14 @@ router.patch('/users/:id/status', authenticate, authorize(['superadmin']), admin
         { priority: 'high', data: { status, updated_by: req.user.id } }
       ));
     }
+
+    await recordAdminAudit(req, {
+      action: 'user.status.update',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { status },
+    });
 
     res.json({
       message: 'User status updated',
@@ -294,6 +311,23 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin', 'admin
       reason
     ));
 
+    await recordAdminAudit(req, {
+      action: `user.balance.${action}`,
+      targetType: 'user',
+      targetId: result.user.id,
+      targetUserId: result.user.id,
+      metadata: {
+        currency,
+        amount: numericAmount,
+        amount_NSL: conversion.amount_NSL,
+        amount_usdt: conversion.amount_usdt,
+        exchange_rate_nsl_per_usdt: conversion.exchange_rate_nsl_per_usdt,
+        previous_balance: result.previousBalance,
+        new_balance: result.newBalance,
+        reason,
+      },
+    });
+
     res.json({
       message: `User balance ${action === 'add' ? 'credited' : 'deducted'}`,
       user: {
@@ -356,6 +390,14 @@ router.patch('/users/:id/vip', authenticate, authorize(['superadmin']), adminLim
       ));
     }
 
+    await recordAdminAudit(req, {
+      action: 'user.vip.update',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { vip_level },
+    });
+
     res.json({
       message: 'User VIP level updated',
       user
@@ -405,6 +447,14 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
       'Your SalonMoney account was created by an administrator.',
       { priority: 'high', action_url: '/dashboard', data: { created_by: req.user.id } }
     ));
+
+    await recordAdminAudit(req, {
+      action: 'user.create',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { username, phone, role, status, ambassador_region, ambassador_sector },
+    });
 
     res.status(201).json({
       message: 'User created successfully',
@@ -481,6 +531,14 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
 
     logger.info(`New ${role} created by superadmin ${req.user.phone}: ${username} (${phone})`);
 
+    await recordAdminAudit(req, {
+      action: 'admin.create',
+      targetType: 'user',
+      targetId: adminUser.id,
+      targetUserId: adminUser.id,
+      metadata: { username, phone, email, role, ambassador_region, ambassador_sector },
+    });
+
     res.status(201).json({
       success: true,
       message: `${role.charAt(0).toUpperCase() + role.slice(1)} user created successfully`,
@@ -519,6 +577,14 @@ router.delete('/users/:id', authenticate, authorize(['superadmin']), async (req,
 
     await User.destroy({ where: { id: req.params.id } });
     logger.warn(`User deleted by admin: ${user.phone}`);
+
+    await recordAdminAudit(req, {
+      action: 'user.delete',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { phone: user.phone, username: user.username, role: user.role },
+    });
 
     res.json({
       message: 'User deleted successfully',
@@ -693,6 +759,13 @@ router.post('/products', authenticate, authorize(['superadmin', 'admin']), async
 
     logger.info(`Product created by admin: ${name} - ${price_NSL} NSL`);
 
+    await recordAdminAudit(req, {
+      action: 'product.create',
+      targetType: 'product',
+      targetId: product.id,
+      metadata: { name, price_NSL, daily_income_NSL, validity_days },
+    });
+
     res.status(201).json({
       message: 'Product created successfully',
       product
@@ -730,6 +803,13 @@ router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), 
 
     logger.info(`Product updated by admin: ${product.name}`);
 
+    await recordAdminAudit(req, {
+      action: 'product.update',
+      targetType: 'product',
+      targetId: product.id,
+      metadata: { updates },
+    });
+
     res.json({
       message: 'Product updated successfully',
       product
@@ -756,6 +836,13 @@ router.delete('/products/:id', authenticate, authorize(['superadmin', 'admin']),
 
     logger.warn(`Product deactivated by admin: ${product.name}`);
 
+    await recordAdminAudit(req, {
+      action: 'product.deactivate',
+      targetType: 'product',
+      targetId: product.id,
+      metadata: { name: product.name },
+    });
+
     res.json({
       message: 'Product deactivated successfully',
       product
@@ -779,6 +866,13 @@ router.patch('/products/:id/toggle', authenticate, authorize(['superadmin', 'adm
     await product.save();
 
     logger.info(`Product ${product.active ? 'activated' : 'deactivated'} by admin: ${product.name}`);
+
+    await recordAdminAudit(req, {
+      action: product.active ? 'product.activate' : 'product.deactivate',
+      targetType: 'product',
+      targetId: product.id,
+      metadata: { name: product.name, active: product.active },
+    });
 
     res.json({
       message: `Product ${product.active ? 'activated' : 'deactivated'} successfully`,
@@ -808,6 +902,13 @@ router.patch('/products/:id/toggle-active', authenticate, authorize(['superadmin
 
     logger.info(`Product ${is_active ? 'activated' : 'deactivated'}: ${product.name}`);
 
+    await recordAdminAudit(req, {
+      action: is_active ? 'product.activate' : 'product.deactivate',
+      targetType: 'product',
+      targetId: product.id,
+      metadata: { name: product.name, active: is_active },
+    });
+
     res.json({
       message: `Product ${is_active ? 'activated' : 'deactivated'} successfully`,
       product
@@ -833,6 +934,13 @@ router.patch('/products/:id/suspend', authenticate, authorize(['superadmin', 'ad
     const product = await Product.findByPk(req.params.id);
 
     logger.warn(`Product suspended by admin: ${product.name}`);
+
+    await recordAdminAudit(req, {
+      action: 'product.suspend',
+      targetType: 'product',
+      targetId: product.id,
+      metadata: { name: product.name },
+    });
 
     res.json({
       message: 'Product suspended successfully',
@@ -873,6 +981,13 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
 
     logger.info(`Product updated by admin: ${product.name} - Price: ${price_NSL} NSL`);
 
+    await recordAdminAudit(req, {
+      action: 'product.update',
+      targetType: 'product',
+      targetId: product.id,
+      metadata: { name, price_NSL, daily_income_NSL, validity_days, description, is_active },
+    });
+
     res.json({
       message: 'Product updated successfully',
       product
@@ -906,6 +1021,14 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
     await sendAccountNotification('Admin password reset', () => notificationService.notifyPasswordReset(user.id, 'admin'));
 
     logger.warn(`Password reset by superadmin for user: ${user.phone || user.username}`);
+
+    await recordAdminAudit(req, {
+      action: 'user.password.reset',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { username: user.username, phone: user.phone },
+    });
 
     res.json({
       message: 'Password reset successfully',
@@ -949,6 +1072,13 @@ router.patch('/users/:id/phone', authenticate, authorize(['superadmin']), adminL
     await sendAccountNotification('Phone update', () => notificationService.notifyPhoneChanged(user.id, user.phone));
 
     logger.warn(`Phone changed by superadmin for user #${user.id}: ${normalizedPhone}`);
+    await recordAdminAudit(req, {
+      action: 'user.phone.update',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { oldPhone, newPhone: normalizedPhone },
+    });
     res.json({ message: 'Phone number updated', user: { id: user.id, phone: user.phone, username: user.username } });
   } catch (error) {
     logger.error('Phone update error:', error);
@@ -975,10 +1105,10 @@ router.get('/rate-limit-info', authenticate, authorize(['superadmin']), (req, re
         },
         {
           name: 'Authentication Limiter',
-          window: '5 minutes',
-          maxRequests: 15,
+          window: '15 minutes',
+          maxRequests: 8,
           description: 'Login/signup attempts',
-          autoResetTime: '5 minutes',
+          autoResetTime: '15 minutes',
           skipSuccessful: true
         },
         {
@@ -1005,7 +1135,7 @@ router.get('/rate-limit-info', authenticate, authorize(['superadmin']), (req, re
         {
           name: 'Password Reset Limiter',
           window: '1 hour',
-          maxRequests: 5,
+          maxRequests: 3,
           description: 'Password reset requests',
           autoResetTime: '1 hour'
         }
@@ -1035,6 +1165,13 @@ router.post('/reset-limits', authenticate, authorize(['superadmin']), async (req
     }
 
     logger.warn(`Rate limits reset requested by superadmin for IP: ${ip}${req.body.ip ? ` and ${req.body.ip}` : ''}`);
+
+    await recordAdminAudit(req, {
+      action: 'rate_limit.reset',
+      targetType: 'ip',
+      targetId: req.body.ip || ip,
+      metadata: { requestorIP: ip, targetIP: req.body.ip || null },
+    });
 
     res.json({
       message: 'Rate limits will auto-expire based on configured time windows',
@@ -1093,6 +1230,14 @@ router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'adm
 
     await sendAccountNotification('KYC approval', () => notificationService.notifyKYCVerified(user.id));
 
+    await recordAdminAudit(req, {
+      action: 'kyc.approve',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { username: user.username },
+    });
+
     res.json({ success: true, message: 'KYC approved', user });
   } catch (error) {
     logger.error('KYC approve error:', error);
@@ -1128,6 +1273,14 @@ router.patch('/kyc/:userId/reject', authenticate, authorize(['superadmin', 'admi
 
     await sendAccountNotification('KYC rejection', () => notificationService.notifyKYCRejected(user.id, reason));
 
+    await recordAdminAudit(req, {
+      action: 'kyc.reject',
+      targetType: 'user',
+      targetId: user.id,
+      targetUserId: user.id,
+      metadata: { username: user.username, reason },
+    });
+
     res.json({ success: true, message: 'KYC rejected and documents cleared' });
   } catch (error) {
     logger.error('KYC reject error:', error);
@@ -1159,6 +1312,11 @@ router.put('/payment-settings', authenticate, authorize(['superadmin']), async (
         await PaymentSetting.upsert({ key, value, updated_by: req.user.id });
       }
     }
+    await recordAdminAudit(req, {
+      action: 'payment_settings.update',
+      targetType: 'payment_settings',
+      metadata: Object.fromEntries(ALLOWED_PAYMENT_KEYS.filter(key => key in req.body).map(key => [key, req.body[key]])),
+    });
     res.json({ success: true, message: 'Payment settings updated' });
   } catch (error) {
     logger.error('Update payment settings error:', error);
@@ -1236,6 +1394,13 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
         'withdrawal',
         result.amountNSL
       ));
+      await recordAdminAudit(req, {
+        action: 'transaction.approve',
+        targetType: 'transaction',
+        targetId: req.params.id,
+        targetUserId: result.userId,
+        metadata: { type: 'withdrawal', amount_NSL: result.amountNSL, notes },
+      });
       res.json({ success: true, message: 'Withdrawal approved. Please process the payout manually.' });
     } else {
       await sendAccountNotification('Deposit approval', () => notificationService.notifyTransactionApproved(
@@ -1243,6 +1408,20 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
         'deposit',
         result.creditNSL.toFixed(0)
       ));
+      await recordAdminAudit(req, {
+        action: 'transaction.approve',
+        targetType: 'transaction',
+        targetId: req.params.id,
+        targetUserId: result.user.id,
+        metadata: {
+          type: 'deposit',
+          base_NSL: result.baseNSL,
+          credited_NSL: result.creditNSL,
+          feePercent: result.feePercent,
+          rate: result.rate,
+          notes,
+        },
+      });
       res.json({
         success: true,
         message: `Approved. ${result.creditNSL.toFixed(0)} NSL credited (${result.feePercent}% fee applied).`,
@@ -1307,6 +1486,14 @@ router.patch('/transaction/:id/reject', authenticate, authorize(['superadmin', '
       reason
     ));
 
+    await recordAdminAudit(req, {
+      action: 'transaction.reject',
+      targetType: 'transaction',
+      targetId: req.params.id,
+      targetUserId: txUserId,
+      metadata: { type: txType, amount_NSL: txAmountNSL, reason },
+    });
+
     res.json({ success: true, message: txType === 'withdrawal' ? 'Withdrawal rejected and balance refunded.' : 'Deposit rejected.' });
   } catch (error) {
     logger.error('Transaction reject error:', error);
@@ -1347,6 +1534,11 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
     ps.invalidate(); // clear cache so next read is fresh
     const updated = await ps.getAll();
     logger.info(`Platform settings updated by ${req.user.phone}`);
+    await recordAdminAudit(req, {
+      action: 'platform_settings.update',
+      targetType: 'platform_settings',
+      metadata: Object.fromEntries(allowed.filter(key => req.body[key] !== undefined).map(key => [key, req.body[key]])),
+    });
     res.json({ message: 'Settings saved', settings: updated });
   } catch (err) {
     logger.error('Platform settings save error:', err);
@@ -1358,6 +1550,16 @@ router.post('/exchange-rate/refresh', authenticate, authorize(['superadmin', 'fi
   try {
     const snapshot = await refreshExchangeRate({ force: true, updatedBy: req.user.id });
     logger.info(`Exchange rate refresh by ${req.user.phone}: rate=${snapshot.rate}, source=${snapshot.source}, fallback=${snapshot.fallback}`);
+    await recordAdminAudit(req, {
+      action: 'exchange_rate.refresh',
+      targetType: 'exchange_rate',
+      metadata: {
+        rate: snapshot.rate,
+        source: snapshot.source,
+        provider: snapshot.provider,
+        fallback: snapshot.fallback,
+      },
+    });
     res.json({
       success: true,
       message: snapshot.fallback ? 'Using saved exchange rate fallback' : 'Exchange rate refreshed',
@@ -1378,6 +1580,11 @@ router.post('/sync-usdt-balances', authenticate, authorize(['superadmin']), admi
   try {
     const result = await syncUserUsdtBalances();
     logger.warn(`USDT balance sync by ${req.user.phone}: scanned=${result.scanned}, updated=${result.updated}, rate=${result.exchange_rate_nsl_per_usdt}`);
+    await recordAdminAudit(req, {
+      action: 'balances.usdt.sync',
+      targetType: 'balances',
+      metadata: result,
+    });
     res.json({
       success: true,
       message: 'USDT balances synced from NSL balances',

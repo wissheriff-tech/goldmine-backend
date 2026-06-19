@@ -20,6 +20,7 @@ const TwoFactorAuth = require('./TwoFactorAuth');
 const DepositProof = require('./DepositProof');
 const PaymentSetting = require('./PaymentSetting');
 const Testimonial = require('./Testimonial');
+const AdminAuditLog = require('./AdminAuditLog');
 
 // ==================== ASSOCIATIONS ====================
 
@@ -72,6 +73,11 @@ DepositProof.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 DepositProof.belongsTo(User, { foreignKey: 'reviewed_by', as: 'reviewer' });
 DepositProof.belongsTo(Transaction, { foreignKey: 'transaction_id', as: 'transaction' });
 
+// User <-> AdminAuditLog
+User.hasMany(AdminAuditLog, { foreignKey: 'actor_user_id', as: 'audit_actions', constraints: false });
+AdminAuditLog.belongsTo(User, { foreignKey: 'actor_user_id', as: 'actor', constraints: false });
+AdminAuditLog.belongsTo(User, { foreignKey: 'target_user_id', as: 'targetUser', constraints: false });
+
 module.exports = {
   sequelize,
   User,
@@ -88,4 +94,5 @@ module.exports = {
   DepositProof,
   PaymentSetting,
   Testimonial,
+  AdminAuditLog,
 };

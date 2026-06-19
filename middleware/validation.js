@@ -3,7 +3,11 @@ const Joi = require('joi');
 // Validation middleware factory
 const validate = (schema) => {
   return (req, res, next) => {
-    const { error } = schema.validate(req.body, { abortEarly: false });
+    const { error, value } = schema.validate(req.body || {}, {
+      abortEarly: false,
+      convert: true,
+      stripUnknown: { objects: true },
+    });
 
     if (error) {
       const errors = error.details.map(detail => ({
@@ -18,6 +22,7 @@ const validate = (schema) => {
       });
     }
 
+    req.body = value;
     next();
   };
 };

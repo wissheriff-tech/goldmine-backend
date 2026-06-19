@@ -388,6 +388,12 @@ app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
     const [, wasCreated] = await Product.upsert(p);
     wasCreated ? created++ : updated++;
   }
+  const { recordAdminAudit } = require('./utils/adminAudit');
+  await recordAdminAudit(req, {
+    action: 'products.seed',
+    targetType: 'product',
+    metadata: { created, updated, total: plans.length, exchange_rate_nsl_per_usdt: NSL_RATE },
+  });
   res.json({ message: 'Products seeded', created, updated, total: plans.length, exchange_rate_nsl_per_usdt: NSL_RATE });
 });
 
