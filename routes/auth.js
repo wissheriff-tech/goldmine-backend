@@ -33,7 +33,7 @@ const authUserPayload = async (user) => {
     ambassador_region: user.ambassador_region,
     ambassador_sector: user.ambassador_sector,
     twoFactorEnabled: user.twoFactorEnabled,
-    profile_photo: user.profile_photo
+    profile_photo: null
   };
 };
 

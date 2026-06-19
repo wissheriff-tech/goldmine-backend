@@ -13,7 +13,7 @@ const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
 const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
-const { profileUpload, paymentUpload, kycUpload, assertImageMagicBytes, assertDocumentMagicBytes } = require('../middleware/upload');
+const { paymentUpload, kycUpload, assertImageMagicBytes, assertDocumentMagicBytes } = require('../middleware/upload');
 const path = require('path');
 const fs = require('fs');
 const { put: blobPut } = require('@vercel/blob');
@@ -68,7 +68,7 @@ router.get('/dashboard', authenticate, async (req, res) => {
         status: user.status,
         kyc_verified: user.kyc_verified,
         created_at: user.created_at,
-        profile_photo: user.profile_photo
+        profile_photo: null
       },
       products: userProducts,
       referrals: {
@@ -540,7 +540,7 @@ router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => 
         username: user.username,
         email: user.email,
         phone: user.phone,
-        profile_photo: user.profile_photo,
+        profile_photo: null,
         updated_at: user.updated_at
       }
     });
@@ -550,44 +550,9 @@ router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => 
   }
 });
 
-// Upload profile photo
-router.post('/upload-profile-photo', authenticate, profileUpload.single('profile_photo'), assertImageMagicBytes, async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
-
-    const user = await User.findByPk(req.user.id);
-    if (!user) {
-      fs.unlinkSync(req.file.path);
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    // Delete old profile photo if exists
-    if (user.profile_photo) {
-      const oldPhotoPath = path.join(__dirname, '../', user.profile_photo);
-      if (fs.existsSync(oldPhotoPath)) {
-        fs.unlinkSync(oldPhotoPath);
-      }
-    }
-
-    // Save new profile photo path
-    const photoUrl = `/uploads/profiles/${req.file.filename}`;
-    user.profile_photo = photoUrl;
-    await user.save();
-
-    logger.info(`Profile photo uploaded for user ${user.id}`);
-    res.json({
-      message: 'Profile photo uploaded successfully',
-      profile_photo: photoUrl
-    });
-  } catch (error) {
-    if (req.file) {
-      fs.unlinkSync(req.file.path);
-    }
-    logger.error('Profile photo upload error:', error);
-    res.status(500).json({ message: 'Error uploading profile photo', error: error.message });
-  }
+// Profile photos are disabled. User avatars are generated from account initials.
+router.post('/upload-profile-photo', authenticate, (req, res) => {
+  res.status(410).json({ message: 'Profile photo uploads are disabled. Your account avatar uses your initial.' });
 });
 
 // Upload payment proof for transaction

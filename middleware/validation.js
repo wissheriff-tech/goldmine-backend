@@ -401,12 +401,7 @@ const updateProfileSchema = Joi.object({
   phone: Joi.string()
     .pattern(/^\+?[0-9]{10,15}$/)
     .optional()
-    .messages({ 'string.pattern.base': 'Phone number must be 10-15 digits' }),
-
-  profile_photo: Joi.string()
-    .pattern(/^\/uploads\/[a-zA-Z0-9_\-./]+$/)
-    .optional()
-    .messages({ 'string.pattern.base': 'profile_photo must be a relative upload path' })
+    .messages({ 'string.pattern.base': 'Phone number must be 10-15 digits' })
 });
 
 // Export validation middleware
