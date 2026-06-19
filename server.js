@@ -127,11 +127,12 @@ app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, (req, re
 app.use('/api/', globalLimiter);
 
 // Database Connection
-let sequelize, User;
+let sequelize, User, Product;
 try {
   const models = require('./models');
   sequelize = models.sequelize;
   User = models.User;
+  Product = models.Product;
   console.log('Models loaded OK. NODE_ENV:', process.env.NODE_ENV);
 } catch (modelErr) {
   console.error('MODELS LOAD FAILED:', modelErr.message, modelErr.stack);
@@ -216,6 +217,26 @@ const ensureNotificationEnumValues = async () => {
   }
 };
 
+const syncVipProducts = async (label) => {
+  if (process.env.AUTO_SYNC_VIP_PRODUCTS === 'false') {
+    logger.info(`${label}: VIP product sync disabled`);
+    return;
+  }
+
+  const rate = await getNslPerUsdt();
+  const settings = await ps.getAll();
+  const validityDays = Number(settings.dur_week) || 7;
+  let created = 0;
+  let updated = 0;
+
+  for (const plan of VIP_PRODUCT_PLANS) {
+    const [, wasCreated] = await Product.upsert(planToProductSeed(plan, rate, validityDays));
+    wasCreated ? created++ : updated++;
+  }
+
+  logger.info(`${label}: VIP products synced (created=${created}, updated=${updated}, rate=${rate})`);
+};
+
 // On Vercel: skip startup DB sync (too slow for cold start). Tables are synced lazily.
 // On server: sync on startup as normal.
 if (!isVercel) {
@@ -227,6 +248,7 @@ if (!isVercel) {
       await sequelize.sync({ alter: false, force: false });
       logger.info('Database tables synced');
       await syncSuperAdminUser('Database');
+      await syncVipProducts('Database');
     } catch (err) {
       logger.error('Database init error:', err.message);
     }
@@ -293,6 +315,7 @@ const initDb = async () => {
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
     await syncSuperAdminUser('Vercel DB');
+    await syncVipProducts('Vercel DB');
     dbReady = true;
     logger.info('Vercel DB: ready');
   } catch (err) {
