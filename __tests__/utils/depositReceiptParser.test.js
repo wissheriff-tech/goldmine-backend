@@ -55,4 +55,63 @@ describe('deposit receipt parser', () => {
     expect(validation.valid).toBe(false);
     expect(validation.errors).toContain('Mobile money number could not be read from the screenshot.');
   });
+
+  test('extracts Orange app details from enhanced OCR variants', () => {
+    const receipt = sanitizeReceiptSubmission({
+      provider: 'orange_money',
+      ocr_text: `
+        Details
+        Money Transfer to 078694040
+        Sender : 078811767
+        Receiver : 078694040
+        Main Account
+        ReferencePP260612.1510 B41747
+        2026 06 121510
+        -SLE1
+        Details
+        Money Transfer to 078694040
+        ReferencePP260612 1510 BA41747
+        Sender ; 078811767
+        Receiver : 078694040
+        Main Account - SLE1
+      `,
+    });
+
+    expect(receipt.provider).toBe('orange_money');
+    expect(receipt.reference_id).toBe('PP260612.1510.B41747');
+    expect(receipt.sender_number).toBe('078811767');
+    expect(receipt.receiver_number).toBe('078694040');
+    expect(receipt.amount).toBe(1);
+    expect(receipt.currency).toBe('NSL');
+    expect(receipt.timestamp_receipt).toBe('2026-06-12 15:10');
+  });
+
+  test('extracts the latest Orange SMS transaction block with local phone number', () => {
+    const receipt = sanitizeReceiptSubmission({
+      provider: 'orange_money',
+      ocr_text: `
+        to recharge Le 40 from
+        72230415 is successful.Please
+        check your balance.
+        Orange info: The transaction
+        number
+        R260306.2015.5100b6 to
+        recharge Le 40 from
+        74516340 is successful.Please
+        check your balance.
+        Transaction number
+        R260321.1745.500042 to
+        recharge 10 Le from 74777711
+        is successful.Please check
+        your balance.
+      `,
+    });
+
+    expect(receipt.provider).toBe('orange_money');
+    expect(receipt.reference_id).toBe('R260321.1745.500042');
+    expect(receipt.amount).toBe(10);
+    expect(receipt.currency).toBe('NSL');
+    expect(receipt.sender_number).toBe('74777711');
+    expect(receipt.receiver_number).toBe('');
+  });
 });
