@@ -1,6 +1,14 @@
 const Notification = require('../models/Notification');
 const logger = require('./logger');
 
+function formatMoney(amount, currency = 'NSL') {
+  const value = Number(amount);
+  const formatted = Number.isFinite(value)
+    ? value.toLocaleString('en-US', { maximumFractionDigits: currency === 'USDT' ? 6 : 2 })
+    : String(amount || 0);
+  return `${formatted} ${currency}`;
+}
+
 class NotificationService {
   // Create a notification
   async create(userId, type, title, message, options = {}) {
@@ -75,6 +83,55 @@ class NotificationService {
         priority: 'high',
         icon: 'cancel',
         action_url: '/transactions'
+      }
+    );
+  }
+
+  // Deposit approved notification
+  async notifyRechargeApproved(userId, amount, currency = 'NSL', data = {}) {
+    return this.create(
+      userId,
+      'recharge_approved',
+      'Deposit Successful',
+      `Your deposit of ${formatMoney(amount, currency)} has been approved and credited successfully.`,
+      {
+        priority: 'high',
+        icon: 'payments',
+        action_url: '/transactions',
+        data
+      }
+    );
+  }
+
+  // Deposit rejected notification
+  async notifyRechargeRejected(userId, amount, currency = 'NSL', reason = 'No reason provided', data = {}) {
+    return this.create(
+      userId,
+      'recharge_rejected',
+      'Deposit Rejected',
+      `Your deposit of ${formatMoney(amount, currency)} was rejected. Reason: ${reason}`,
+      {
+        priority: 'high',
+        icon: 'cancel',
+        action_url: '/transactions',
+        data: { ...data, reason }
+      }
+    );
+  }
+
+  // Reviewer alert for a new deposit waiting for approval
+  async notifyDepositPendingReviewer(userId, summary = {}) {
+    const referenceText = summary.referenceId ? ` Reference: ${summary.referenceId}.` : '';
+    return this.create(
+      userId,
+      'admin_message',
+      'New Deposit Pending',
+      `${summary.providerLabel || 'Deposit'} ${summary.amountLabel || ''} is waiting for approval.${referenceText}`,
+      {
+        priority: 'urgent',
+        icon: 'payments',
+        action_url: summary.actionUrl || '/admin?tab=Deposits',
+        data: summary.data || {}
       }
     );
   }

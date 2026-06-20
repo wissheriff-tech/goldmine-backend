@@ -202,7 +202,10 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
       emailService.sendTransactionApproved(savedUser.email, savedUser.username, savedTransaction.type, savedTransaction.amount_NSL, savedTransaction.amount_usdt, savedUser.balance_NSL).catch(e => logger.error('Email notification error:', e));
     }
 
-    notificationService.notifyTransactionApproved(savedUser.id, savedTransaction.type, savedTransaction.amount_NSL).catch(e => logger.error('In-app notification error:', e));
+    const approvalNotification = savedTransaction.type === 'recharge'
+      ? notificationService.notifyRechargeApproved(savedUser.id, savedTransaction.amount_NSL, 'NSL', { transaction_id: savedTransaction.id })
+      : notificationService.notifyTransactionApproved(savedUser.id, savedTransaction.type, savedTransaction.amount_NSL);
+    approvalNotification.catch(e => logger.error('In-app notification error:', e));
 
     res.json({
       message: 'Transaction approved',
@@ -263,12 +266,22 @@ router.patch('/transactions/:id/reject', authenticate, authorize(['superadmin', 
     // Send in-app notification
     if (user) {
       try {
-        await notificationService.notifyTransactionRejected(
-          user.id,
-          transaction.type,
-          transaction.amount_NSL,
-          transaction.notes
-        );
+        if (transaction.type === 'recharge') {
+          await notificationService.notifyRechargeRejected(
+            user.id,
+            transaction.amount_NSL,
+            'NSL',
+            transaction.notes,
+            { transaction_id: transaction.id }
+          );
+        } else {
+          await notificationService.notifyTransactionRejected(
+            user.id,
+            transaction.type,
+            transaction.amount_NSL,
+            transaction.notes
+          );
+        }
       } catch (notifError) {
         logger.error('In-app notification error:', notifError);
         // Don't fail the transaction if notification fails

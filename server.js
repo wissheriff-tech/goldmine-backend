@@ -245,6 +245,8 @@ const ensureNotificationEnumValues = async () => {
     'phone_changed',
     'password_changed',
     'password_reset',
+    'recharge_approved',
+    'recharge_rejected',
     'admin_message'
   ];
 

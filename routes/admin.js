@@ -1403,10 +1403,11 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
       });
       res.json({ success: true, message: 'Withdrawal approved. Please process the payout manually.' });
     } else {
-      await sendAccountNotification('Deposit approval', () => notificationService.notifyTransactionApproved(
+      await sendAccountNotification('Deposit approval', () => notificationService.notifyRechargeApproved(
         result.user.id,
-        'deposit',
-        result.creditNSL.toFixed(0)
+        result.creditNSL.toFixed(0),
+        'NSL',
+        { transaction_id: req.params.id, gross_NSL: result.baseNSL, feePercent: result.feePercent }
       ));
       await recordAdminAudit(req, {
         action: 'transaction.approve',
@@ -1479,12 +1480,22 @@ router.patch('/transaction/:id/reject', authenticate, authorize(['superadmin', '
       logger.info(`Transaction ${tx.id} (${tx.type}) rejected by admin ${req.user.username}: ${reason}`);
     });
 
-    await sendAccountNotification('Transaction rejection', () => notificationService.notifyTransactionRejected(
-      txUserId,
-      txType,
-      txAmountNSL,
-      reason
-    ));
+    if (txType === 'recharge') {
+      await sendAccountNotification('Deposit rejection', () => notificationService.notifyRechargeRejected(
+        txUserId,
+        txAmountNSL,
+        'NSL',
+        reason,
+        { transaction_id: req.params.id }
+      ));
+    } else {
+      await sendAccountNotification('Transaction rejection', () => notificationService.notifyTransactionRejected(
+        txUserId,
+        txType,
+        txAmountNSL,
+        reason
+      ));
+    }
 
     await recordAdminAudit(req, {
       action: 'transaction.reject',

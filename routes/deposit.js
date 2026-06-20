@@ -10,9 +10,16 @@ const { assertImageMagicBytes } = require('../middleware/upload');
 const { DepositProof, User, Transaction, PaymentSetting, sequelize } = require('../models');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
+const notificationService = require('../utils/notificationService');
 const ps = require('../utils/platformSettings');
 const { getNslPerUsdt, usdtToNsl, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
-const { put: blobPut } = require('@vercel/blob');
+const { storeSanitizedReceiptImage } = require('../utils/receiptImageStorage');
+const { notifyDepositReviewers } = require('../utils/depositReviewNotifications');
+const {
+  sanitizeReceiptSubmission,
+  validateDepositReceipt,
+  providerLabel,
+} = require('../utils/depositReceiptParser');
 const isVercel = process.env.VERCEL === '1';
 
 const router = express.Router();
@@ -85,6 +92,10 @@ const upload = multer({
   }
 });
 
+function purgeLocalUpload(file) {
+  if (file?.path) fs.unlink(file.path, () => {});
+}
+
 async function getPaymentSettings() {
   try {
     const rows = await PaymentSetting.findAll();
@@ -145,36 +156,68 @@ router.post('/submit', authenticate, depositLimiter, upload.single('receipt'), a
       return res.status(400).json({ message: 'Receipt image is required' });
     }
 
-    if (!amount || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
-      return res.status(400).json({ message: 'Valid amount is required' });
+    const receipt = sanitizeReceiptSubmission({
+      provider: 'binance',
+      amount,
+      currency: 'USDT',
+      reference_id: txid,
+    });
+    const validation = validateDepositReceipt(receipt);
+    if (!validation.valid) {
+      purgeLocalUpload(req.file);
+      return res.status(400).json({ message: validation.errors[0] || 'Receipt scan is incomplete.' });
     }
 
-    let receiptImage;
-    if (isVercel) {
-      const ext = path.extname(req.file.originalname) || '.jpg';
-      const blob = await blobPut(`deposits/${req.user.id}/${Date.now()}${ext}`, req.file.buffer, {
-        access: 'public',
-        contentType: req.file.mimetype,
-      });
-      receiptImage = blob.url;
-    } else {
-      receiptImage = req.file.path;
+    const existingCrypto = await DepositProof.findOne({
+      where: sequelize.where(
+        sequelize.fn('lower', sequelize.col('user_submitted_txid')),
+        receipt.reference_id.toLowerCase()
+      ),
+    });
+    if (existingCrypto) {
+      purgeLocalUpload(req.file);
+      return res.status(400).json({ message: 'This Binance reference has already been submitted.' });
     }
+
+    const receiptImage = await storeSanitizedReceiptImage({
+      file: req.file,
+      userId: req.user.id,
+      localDir: 'uploads/deposits',
+      blobPrefix: 'deposits',
+      filePrefix: 'deposit',
+    });
 
     const proof = await DepositProof.create({
       user_id: req.user.id,
       receipt_image: receiptImage,
       original_filename: req.file.originalname,
-      user_submitted_amount: parseFloat(amount),
+      ocr_extracted_data: {
+        provider: receipt.provider,
+        amount: receipt.amount,
+        currency: receipt.currency,
+        reference_id: receipt.reference_id,
+        source: 'client_ocr_sanitized',
+      },
+      user_submitted_amount: receipt.amount,
       user_submitted_currency: 'USDT',
-      user_submitted_txid: txid || null,
+      user_submitted_txid: receipt.reference_id,
       user_notes: notes || null,
       deposit_type: 'crypto_wallet',
       ip_address: req.ip,
       status: 'pending'
     });
 
-    logger.info(`Deposit proof submitted by user ${req.user.id}: $${amount} USDT`);
+    notifyDepositReviewers({
+      provider: receipt.provider,
+      providerLabel: providerLabel(receipt.provider),
+      amount: receipt.amount,
+      currency: 'USDT',
+      referenceId: receipt.reference_id,
+      depositType: 'crypto',
+      depositId: proof.id,
+    }).catch(error => logger.error('Deposit reviewer notification failed:', error));
+
+    logger.info(`Deposit proof submitted by user ${req.user.id}: ${receipt.amount} USDT`);
 
     res.status(201).json({
       success: true,
@@ -182,6 +225,7 @@ router.post('/submit', authenticate, depositLimiter, upload.single('receipt'), a
       data: { id: proof.id, status: proof.status, amount: proof.user_submitted_amount }
     });
   } catch (error) {
+    purgeLocalUpload(req.file);
     logger.error('Deposit submit error:', error);
     res.status(500).json({ message: 'Error submitting deposit proof', error: error.message });
   }
@@ -297,6 +341,10 @@ router.patch('/:id/approve', authenticate, authorizeRoles('admin', 'superadmin',
       emailService.sendTransactionApproved(user.email, user.username, 'deposit', nslAmount, amount, user.balance_NSL)
         .catch(err => logger.error('Deposit approval email failed:', err));
     }
+    notificationService.notifyRechargeApproved(user.id, nslAmount, 'NSL', {
+      deposit_id: req.params.id,
+      approved_usdt: amount,
+    }).catch(err => logger.error('Deposit approval notification failed:', err));
 
     res.json({
       success: true,
@@ -324,10 +372,15 @@ router.patch('/:id/reject', authenticate, authorizeRoles('admin', 'superadmin', 
 
     await proof.reject(req.user.id, reason);
 
-    const user = await User.findByPk(proof.user_id, { attributes: ['email', 'username'] });
+    const user = await User.findByPk(proof.user_id, { attributes: ['id', 'email', 'username'] });
     if (user?.email) {
       emailService.sendTransactionRejected(user.email, user.username, 'deposit', proof.user_submitted_amount, reason)
         .catch(err => logger.error('Deposit rejection email failed:', err));
+    }
+    if (user) {
+      notificationService.notifyRechargeRejected(user.id, proof.user_submitted_amount, 'USDT', reason, {
+        deposit_id: proof.id,
+      }).catch(err => logger.error('Deposit rejection notification failed:', err));
     }
 
     logger.info(`Deposit ${proof.id} rejected: ${reason}`);
