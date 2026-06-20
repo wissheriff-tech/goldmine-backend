@@ -5,6 +5,7 @@ const { adminLimiter } = require('../middleware/security');
 
 const router = express.Router();
 
+const VALID_ACTIVITY_TYPES = ['withdrawal', 'earning', 'deposit'];
 const ACTIVITY_TYPES = ['withdrawal', 'earning', 'deposit', 'withdrawal', 'earning', 'deposit'];
 
 const COUNTRY_CONFIG = [
@@ -190,7 +191,9 @@ async function seedIfNeeded() {
     }
   } catch {}
 }
-seedIfNeeded();
+if (process.env.AUTO_SEED_TESTIMONIALS === 'true') {
+  seedIfNeeded();
+}
 
 // Public: visible testimonials for user dashboard feed
 router.get('/', async (req, res) => {
@@ -271,20 +274,27 @@ router.delete('/:id', authenticate, authorize(['superadmin']), adminLimiter, asy
 // Admin: create
 router.post('/', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
   try {
-    const { name, country, flag, phone, type, amount_nsl } = req.body;
+    const { name, country, phone, type, amount_nsl } = req.body;
     if (!name || !country || !phone || !type || !amount_nsl) {
       return res.status(400).json({ message: 'Name, country, phone, type, and amount are required' });
     }
+    const cleanName = String(name).trim();
+    const cleanPhone = String(phone).trim();
+    const cleanType = String(type).trim().toLowerCase();
+    if (cleanName.length > 80) return res.status(400).json({ message: 'Name cannot exceed 80 characters' });
+    if (cleanPhone.length > 30) return res.status(400).json({ message: 'Phone cannot exceed 30 characters' });
+    if (!VALID_ACTIVITY_TYPES.includes(cleanType)) return res.status(400).json({ message: 'Unsupported activity type' });
     const countryConfig = getCountryConfig(country);
     if (!countryConfig) return res.status(400).json({ message: 'Unsupported country' });
     const amount = Number(amount_nsl);
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ message: 'Amount must be positive' });
+    if (amount > 999999999999.99) return res.status(400).json({ message: 'Amount is too large' });
     const t = await Testimonial.create({
-      name: String(name).trim(),
+      name: cleanName,
       country: countryConfig.country,
-      flag: flag || countryConfig.flag,
-      phone: String(phone).trim(),
-      type,
+      flag: countryConfig.flag,
+      phone: cleanPhone,
+      type: cleanType,
       amount_nsl: amount,
     });
     res.status(201).json({ testimonial: decorateTestimonial(t), countries: COUNTRY_OPTIONS });
