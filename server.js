@@ -145,18 +145,24 @@ const generateStartupReferralCode = () => Math.random().toString(36).substring(2
 const syncSuperAdminUser = async (label) => {
   const adminConfig = getSuperAdminConfig();
 
-  let admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
-  if (!admin) {
-    admin = await User.scope('withSecrets').findOne({
-      where: {
-        [Op.or]: [
-          { username: adminConfig.username },
-          { phone: adminConfig.phone },
-          { email: adminConfig.email }
-        ]
-      }
+  const configuredMatches = await User.scope('withSecrets').findAll({
+    where: {
+      [Op.or]: [
+        { username: adminConfig.username },
+        { phone: adminConfig.phone },
+        { email: adminConfig.email }
+      ]
+    },
+    order: [['id', 'ASC']]
+  });
+  const admin =
+    configuredMatches.find(user => user.username === adminConfig.username) ||
+    configuredMatches.find(user => user.phone === adminConfig.phone) ||
+    configuredMatches.find(user => user.email === adminConfig.email) ||
+    await User.scope('withSecrets').findOne({
+      where: { role: 'superadmin' },
+      order: [['id', 'ASC']]
     });
-  }
 
   if (!admin) {
     if (!adminConfig.password) {
