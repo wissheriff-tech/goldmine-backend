@@ -182,17 +182,51 @@ const syncSuperAdminUser = async (label) => {
   const updates = {};
   if (admin.role !== 'superadmin') updates.role = 'superadmin';
   if (admin.status !== 'active') updates.status = 'active';
+
+  const identifierUpdates = {};
+  if (admin.username !== adminConfig.username) identifierUpdates.username = adminConfig.username;
+  if (admin.phone !== adminConfig.phone) identifierUpdates.phone = adminConfig.phone;
+  if (admin.email !== adminConfig.email) identifierUpdates.email = adminConfig.email;
+
+  if (Object.keys(identifierUpdates).length > 0) {
+    const conflictingUser = await User.findOne({
+      where: {
+        id: { [Op.ne]: admin.id },
+        [Op.or]: [
+          { username: adminConfig.username },
+          { phone: adminConfig.phone },
+          { email: adminConfig.email }
+        ]
+      }
+    });
+
+    if (conflictingUser) {
+      logger.error(`${label}: cannot sync superadmin login identifiers because a configured identifier belongs to another user`);
+    } else {
+      Object.assign(updates, identifierUpdates);
+    }
+  }
+
   if (!admin.referral_code || admin.referral_code === 'ADMIN00001') {
     updates.referral_code = generateStartupReferralCode();
   }
   if (!admin.kyc_verified) updates.kyc_verified = true;
   if (!admin.emailVerified) updates.emailVerified = true;
 
+  if (adminConfig.password) {
+    const passwordMatchesConfig = await admin.comparePassword(adminConfig.password);
+    if (!passwordMatchesConfig) {
+      updates.password_hash = adminConfig.password;
+    }
+  } else {
+    logger.warn(`${label}: SUPER_ADMIN_PASSWORD is not set; existing superadmin password was not synced`);
+  }
+
   if (Object.keys(updates).length > 0) {
     await admin.update(updates);
-    logger.info(`${label}: superadmin account protections synced`);
+    logger.info(`${label}: superadmin account credentials and protections synced`);
   } else {
-    logger.info(`${label}: superadmin account protections already synced`);
+    logger.info(`${label}: superadmin account credentials and protections already synced`);
   }
 };
 
