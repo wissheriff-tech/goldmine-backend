@@ -1217,7 +1217,6 @@ router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'adm
       attributes: { exclude: ['password_hash'] }
     });
     if (!user) return res.status(404).json({ message: 'User not found' });
-    if (user.kyc_verified) return res.status(400).json({ message: 'KYC already verified' });
 
     await user.update({ kyc_verified: true });
 
@@ -1248,8 +1247,7 @@ router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'adm
 // KYC: Reject a user's documents
 router.patch('/kyc/:userId/reject', authenticate, authorize(['superadmin', 'admin']), adminLimiter, async (req, res) => {
   try {
-    const { reason } = req.body;
-    if (!reason) return res.status(400).json({ message: 'Rejection reason is required' });
+    const { reason = 'Revoked by admin' } = req.body;
 
     const user = await User.findByPk(req.params.userId, {
       attributes: { exclude: ['password_hash'] }
