@@ -8,7 +8,7 @@ const DEFAULTS = {
   recharge_fee_pct:     5,
   withdrawal_fee_pct:   10,
   om_withdrawal_fee_pct: 20,
-  exchange_rate_nsl_per_usdt: 23.99,
+  exchange_rate_nsl_per_usdt: 23,
   dur_short:         3,
   dur_week:          7,
   dur_month:         30,

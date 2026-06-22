@@ -358,6 +358,21 @@ const initDb = async () => {
     await sequelize.sync({ force: false });
     logger.info('Vercel DB: synced');
     await syncSuperAdminUser('Vercel DB');
+
+    // Fix corrupted exchange rate — NSL is internal (1 USDT = 23 NSL), never real-world SLE
+    try {
+      const { PaymentSetting } = require('./models');
+      const rateRow = await PaymentSetting.findOne({ where: { key: 'exchange_rate_nsl_per_usdt' } });
+      const storedRate = rateRow ? parseFloat(rateRow.value) : 0;
+      if (!storedRate || storedRate > 100) {
+        await PaymentSetting.upsert({ key: 'exchange_rate_nsl_per_usdt', value: '23' });
+        ps.invalidate();
+        logger.info('Vercel DB: exchange rate reset to 23 NSL/USDT');
+      }
+    } catch (e) {
+      logger.warn('Exchange rate reset skipped:', e.message);
+    }
+
     await syncVipProducts('Vercel DB');
     dbReady = true;
     logger.info('Vercel DB: ready');
@@ -411,6 +426,22 @@ app.get('/api', (req, res) => {
 app.get(['/admin', '/superadmin'], (req, res) => {
   const frontendUrl = (process.env.FRONTEND_URL || 'https://salonmoneynew.vercel.app').replace(/\/+$/, '');
   res.redirect(302, `${frontendUrl}/admin`);
+});
+
+// Secret-protected superadmin password reset (emergency use only)
+app.post('/api/reset-admin-password', async (req, res) => {
+  const { secret, new_password } = req.body;
+  const resetSecret = process.env.RESET_SECRET;
+  if (!resetSecret || secret !== resetSecret) return res.status(403).json({ message: 'Forbidden' });
+  try {
+    const admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
+    if (!admin) return res.status(404).json({ message: 'Superadmin not found' });
+    admin.password_hash = new_password;
+    await admin.save();
+    res.json({ message: 'Password reset', username: admin.username });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
 // Seed products (admin-only, idempotent)

@@ -2,7 +2,7 @@ const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
-const { User, Transaction, DepositProof, sequelize } = require('../models');
+const { User, Transaction, sequelize } = require('../models');
 const { authenticate } = require('../middleware/auth');
 const { transactionLimiter } = require('../middleware/security');
 const { assertImageMagicBytes } = require('../middleware/upload');
@@ -10,23 +10,12 @@ const logger  = require('../utils/logger');
 const { FEE } = require('../config/constants');
 const ps = require('../utils/platformSettings');
 const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
-const { storeSanitizedReceiptImage } = require('../utils/receiptImageStorage');
-const { notifyDepositReviewers } = require('../utils/depositReviewNotifications');
-const {
-  sanitizeReceiptSubmission,
-  validateDepositReceipt,
-  providerLabel,
-  isMobileProvider,
-} = require('../utils/depositReceiptParser');
+const { put: blobPut } = require('@vercel/blob');
 const isVercel = process.env.VERCEL === '1';
 
 const router = express.Router();
 
 const SLL_PER_NSL = () => parseFloat(process.env.ORANGE_SLL_PER_NSL || 1);
-
-function purgeLocalUpload(file) {
-  if (file?.path) fs.unlink(file.path, () => {});
-}
 
 // Multer for screenshot uploads: memory on Vercel, disk locally
 const omStorage = isVercel
@@ -57,143 +46,54 @@ const omUpload = multer({
 });
 
 // ── POST /api/orange-money/manual-deposit ─────────────────────────────────
-// User uploads a scanned payment receipt; admin or finance approves manually.
+// User uploads screenshot of Orange Money receipt; admin approves manually.
 router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single('screenshot'), assertImageMagicBytes, async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: 'Screenshot is required' });
-
-    const receipt = sanitizeReceiptSubmission(req.body);
-    const validation = validateDepositReceipt(receipt);
-    if (!validation.valid) {
-      purgeLocalUpload(req.file);
-      return res.status(400).json({ message: validation.errors[0] || 'Receipt scan is incomplete.' });
-    }
-
-    if (receipt.provider === 'binance') {
-      const existingCrypto = await DepositProof.findOne({
-        where: sequelize.where(
-          sequelize.fn('lower', sequelize.col('user_submitted_txid')),
-          receipt.reference_id.toLowerCase()
-        ),
-      });
-      if (existingCrypto) {
-        purgeLocalUpload(req.file);
-        return res.status(400).json({ message: 'This Binance reference has already been submitted.' });
-      }
-
-      const receiptImage = await storeSanitizedReceiptImage({
-        file: req.file,
-        userId: req.user.id,
-        localDir: 'uploads/deposits',
-        blobPrefix: 'deposits',
-        filePrefix: 'deposit',
-      });
-
-      const proof = await DepositProof.create({
-        user_id: req.user.id,
-        receipt_image: receiptImage,
-        original_filename: req.file.originalname,
-        ocr_extracted_data: {
-          provider: receipt.provider,
-          amount: receipt.amount,
-          currency: receipt.currency,
-          reference_id: receipt.reference_id,
-          timestamp_receipt: receipt.timestamp_receipt || null,
-          source: 'client_ocr_sanitized',
-        },
-        user_submitted_amount: receipt.amount,
-        user_submitted_currency: 'USDT',
-        user_submitted_txid: receipt.reference_id,
-        user_notes: 'Submitted from receipt screenshot scan.',
-        deposit_type: 'crypto_wallet',
-        ip_address: req.ip,
-        status: 'pending',
-      });
-
-      notifyDepositReviewers({
-        provider: receipt.provider,
-        providerLabel: providerLabel(receipt.provider),
-        amount: receipt.amount,
-        currency: 'USDT',
-        referenceId: receipt.reference_id,
-        depositType: 'crypto',
-        depositId: proof.id,
-      }).catch(error => logger.error('Deposit reviewer notification failed:', error));
-
-      logger.info(`Binance scanned deposit submitted: ref=${receipt.reference_id} ${receipt.amount} USDT for user #${req.user.id}`);
-      return res.status(201).json({
-        message: 'Deposit proof submitted. Finance will review it shortly.',
-        data: { id: proof.id, status: proof.status, provider: receipt.provider, amount: receipt.amount, currency: 'USDT' },
-      });
-    }
-
-    if (!isMobileProvider(receipt.provider)) {
-      purgeLocalUpload(req.file);
-      return res.status(400).json({ message: 'Unsupported payment provider.' });
-    }
-
-    // Enforce uniqueness of reference ID across all mobile deposits
-    const existing = await Transaction.findOne({
-      where: sequelize.where(
-        sequelize.fn('lower', sequelize.col('reference_id')),
-        receipt.reference_id.toLowerCase()
-      ),
-    });
-    if (existing) {
-      purgeLocalUpload(req.file);
-      return res.status(400).json({ message: 'This reference ID has already been submitted.' });
-    }
-
-    const screenshotPath = await storeSanitizedReceiptImage({
-      file: req.file,
-      userId: req.user.id,
-      localDir: 'uploads/payments',
-      blobPrefix: 'payments',
-      filePrefix: 'om',
-    });
-
-    const isAfricell = receipt.provider === 'africell';
+    const { amount_SLE, amount_NSL, reference_id, sender_number, receiver_number, timestamp_receipt, provider } = req.body;
+    // Accept SLE amount (what user sent on their receipt) — fall back to NSL for legacy clients
+    const rawAmount = parseFloat(amount_SLE || amount_NSL);
+    const isAfricell = (provider || '').toLowerCase() === 'africell';
     const paymentMethod = isAfricell ? 'africell' : 'orange_money';
-    const networkLabel = providerLabel(receipt.provider);
+    const networkLabel  = isAfricell ? 'Africell' : 'Orange Money';
 
-    const transaction = await Transaction.create({
+    if (!rawAmount || rawAmount <= 0) return res.status(400).json({ message: 'Please enter a valid deposit amount' });
+    if (!reference_id?.trim()) return res.status(400).json({ message: 'Reference ID is required' });
+
+    // Enforce uniqueness of reference ID across all users
+    const existing = await Transaction.findOne({ where: { reference_id: reference_id.trim() } });
+    if (existing) return res.status(400).json({ message: 'This reference ID has already been submitted.' });
+
+    let screenshotPath = null;
+    if (req.file) {
+      if (isVercel) {
+        const ext = path.extname(req.file.originalname) || '.jpg';
+        const blob = await blobPut(`payments/${req.user.id}/${Date.now()}${ext}`, req.file.buffer, {
+          access: 'public',
+          contentType: req.file.mimetype,
+        });
+        screenshotPath = blob.url;
+      } else {
+        screenshotPath = req.file.path;
+      }
+    }
+
+    await Transaction.create({
       user_id:          req.user.id,
       type:             'recharge',
-      amount_NSL:       receipt.amount,        // gross local amount, credited after approval and fee
+      amount_NSL:       rawAmount,        // gross SLE amount (1 SLE = 1 NSL at current rate)
       amount_usdt:      0,
       status:           'pending',
       payment_method:   paymentMethod,
       deposit_network:  networkLabel,
-      reference_id:     receipt.reference_id,
+      reference_id:     reference_id.trim(),
       payment_proof:    screenshotPath,
-      notes:            JSON.stringify({
-        amount_SLE: receipt.amount,
-        currency: receipt.currency,
-        sender_number: receipt.sender_number,
-        receiver_number: receipt.receiver_number,
-        timestamp_receipt: receipt.timestamp_receipt,
-        scan_source: 'client_ocr_sanitized',
-      }),
+      notes:            JSON.stringify({ amount_SLE: rawAmount, sender_number, receiver_number, timestamp_receipt }),
     });
 
-    notifyDepositReviewers({
-      provider: receipt.provider,
-      providerLabel: networkLabel,
-      amount: receipt.amount,
-      currency: receipt.currency,
-      referenceId: receipt.reference_id,
-      depositType: 'mobile_money',
-      transactionId: transaction.id,
-    }).catch(error => logger.error('Deposit reviewer notification failed:', error));
-
-    logger.info(`${networkLabel} scanned deposit submitted: ref=${receipt.reference_id} ${receipt.amount} ${receipt.currency} for user #${req.user.id}`);
-    return res.status(201).json({
-      message: 'Deposit proof submitted. Finance will review it shortly.',
-      data: { id: transaction.id, status: transaction.status, provider: receipt.provider, amount: receipt.amount, currency: receipt.currency },
-    });
+    logger.info(`${networkLabel} manual deposit submitted: ref=${reference_id} ${rawAmount} SLE for user #${req.user.id}`);
+    return res.json({ message: 'Deposit proof submitted. Admin will credit your account shortly.' });
   } catch (err) {
-    purgeLocalUpload(req.file);
-    logger.error('Scanned deposit submission error:', err.message);
+    logger.error('Orange Money manual-deposit error:', err.message);
     return res.status(500).json({ message: 'Submission failed. Please try again.' });
   }
 });
