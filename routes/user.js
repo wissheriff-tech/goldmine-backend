@@ -688,7 +688,7 @@ router.get('/kyc/status', authenticate, async (req, res) => {
       additional: !!user.kyc_additional
     };
 
-    const requiredDocs = ['id_front', 'id_back', 'selfie'];
+    const requiredDocs = ['id_front'];
     const allRequiredUploaded = requiredDocs.every(doc => uploadedDocs[doc]);
 
     res.json({
@@ -699,7 +699,7 @@ router.get('/kyc/status', authenticate, async (req, res) => {
         ? 'KYC verified'
         : allRequiredUploaded
           ? 'Documents uploaded, pending verification'
-          : 'Please upload all required documents (ID front, ID back, and selfie)'
+          : 'Please upload your identity document to complete verification'
     });
   } catch (error) {
     logger.error('KYC status fetch error:', error);
