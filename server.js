@@ -417,10 +417,11 @@ app.use('/api/chat', chatRoutes);
 app.use('/api/ambassador', ambassadorRoutes);
 app.use('/api/orange-money', require('./routes/orangeMoney'));
 app.use('/api/cron', require('./routes/cron'));
+app.use('/api/tasks', require('./routes/tasks'));
 
 // Root API info
 app.get('/api', (req, res) => {
-  res.json({ name: 'SalonMoney API', status: 'running', version: '1.0.0' });
+  res.json({ name: 'Gold Mine API', status: 'running', version: '1.0.0' });
 });
 
 app.get(['/admin', '/superadmin'], (req, res) => {

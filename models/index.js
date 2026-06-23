@@ -21,6 +21,7 @@ const DepositProof = require('./DepositProof');
 const PaymentSetting = require('./PaymentSetting');
 const Testimonial = require('./Testimonial');
 const AdminAuditLog = require('./AdminAuditLog');
+const UserTask = require('./UserTask');
 
 // ==================== ASSOCIATIONS ====================
 
@@ -78,6 +79,10 @@ User.hasMany(AdminAuditLog, { foreignKey: 'actor_user_id', as: 'audit_actions', 
 AdminAuditLog.belongsTo(User, { foreignKey: 'actor_user_id', as: 'actor', constraints: false });
 AdminAuditLog.belongsTo(User, { foreignKey: 'target_user_id', as: 'targetUser', constraints: false });
 
+// User <-> UserTask
+User.hasMany(UserTask, { foreignKey: 'user_id', as: 'tasks' });
+UserTask.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 module.exports = {
   sequelize,
   User,
@@ -95,4 +100,5 @@ module.exports = {
   PaymentSetting,
   Testimonial,
   AdminAuditLog,
+  UserTask,
 };
