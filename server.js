@@ -2,6 +2,7 @@
 require("pg");
 const express = require('express');
 const http = require('http');
+const crypto = require('crypto');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
@@ -21,7 +22,8 @@ const {
   validateContentType,
   createCookieWriteGuard,
   sanitizeProductionErrors,
-  preventParameterPollution
+  preventParameterPollution,
+  passwordResetLimiter
 } = require('./middleware/security');
 const { authenticate } = require('./middleware/auth');
 
@@ -43,6 +45,13 @@ const getSuperAdminConfig = () => ({
   email: (process.env.SUPER_ADMIN_EMAIL || SUPER_ADMIN_DEFAULTS.email).trim().toLowerCase(),
   password: process.env.SUPER_ADMIN_PASSWORD
 });
+
+const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
+const timingSafeEqualString = (left, right) => {
+  const leftBuffer = Buffer.from(String(left || ''));
+  const rightBuffer = Buffer.from(String(right || ''));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+};
 
 // Check if running on Vercel (serverless)
 const isVercel = process.env.VERCEL === '1';
@@ -113,12 +122,13 @@ app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, serveLeg
 app.use('/api/', globalLimiter);
 
 // Database Connection
-let sequelize, User, Product;
+let sequelize, User, Product, Session;
 try {
   const models = require('./models');
   sequelize = models.sequelize;
   User = models.User;
   Product = models.Product;
+  Session = models.Session;
   console.log('Models loaded OK. NODE_ENV:', process.env.NODE_ENV);
 } catch (modelErr) {
   console.error('MODELS LOAD FAILED:', modelErr.message, modelErr.stack);
@@ -417,15 +427,19 @@ app.get(['/admin', '/superadmin'], (req, res) => {
 });
 
 // Secret-protected superadmin password reset (emergency use only)
-app.post('/api/reset-admin-password', async (req, res) => {
+app.post('/api/reset-admin-password', passwordResetLimiter, async (req, res) => {
   const { secret, new_password } = req.body;
   const resetSecret = process.env.RESET_SECRET;
-  if (!resetSecret || secret !== resetSecret) return res.status(403).json({ message: 'Forbidden' });
+  if (!resetSecret || !timingSafeEqualString(secret, resetSecret)) return res.status(403).json({ message: 'Forbidden' });
+  if (!isStrongPassword(new_password)) {
+    return res.status(400).json({ message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character' });
+  }
   try {
     const admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
     if (!admin) return res.status(404).json({ message: 'Superadmin not found' });
     admin.password_hash = new_password;
     await admin.save();
+    await Session.update({ is_active: false }, { where: { user_id: admin.id } });
     res.json({ message: 'Password reset', username: admin.username });
   } catch (err) {
     res.status(500).json({ message: err.message });

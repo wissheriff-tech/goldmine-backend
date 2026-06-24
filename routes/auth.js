@@ -17,6 +17,11 @@ const REMEMBER_ME_REFRESH_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 const hashToken = (token) => crypto.createHash('sha256').update(token).digest('hex');
 const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
+const accountStatusMessage = (status) => {
+  if (status === 'frozen') return 'Your account has been frozen';
+  if (status === 'pending') return 'Your account is pending approval';
+  return 'Account is not active';
+};
 const authUserPayload = async (user) => {
   const rate = await getNslPerUsdt();
   return {
@@ -222,12 +227,8 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
-    if (user.status === 'frozen') {
-      return res.status(403).json({ message: 'Your account has been frozen' });
-    }
-
-    if (user.status === 'pending') {
-      return res.status(403).json({ message: 'Your account is pending approval' });
+    if (user.status !== 'active') {
+      return res.status(403).json({ message: accountStatusMessage(user.status) });
     }
 
     // Check if 2FA is enabled
@@ -273,10 +274,10 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
 // Refresh token
 router.post('/refresh', async (req, res) => {
   try {
-    const refreshToken = req.cookies?.refresh_token || req.body?.refreshToken || req.body?.refresh_token;
+    const refreshToken = req.cookies?.refresh_token;
 
     if (!refreshToken) {
-      return res.status(400).json({ message: 'Refresh token is required' });
+      return res.status(400).json({ message: 'Refresh token cookie is required' });
     }
 
     const session = await Session.findOne({
@@ -286,6 +287,17 @@ router.post('/refresh', async (req, res) => {
     if (!session || new Date() > session.expires_at) {
       if (session) await session.update({ is_active: false });
       return res.status(401).json({ message: 'Invalid or expired refresh token' });
+    }
+
+    const user = await User.findByPk(session.user_id);
+    if (!user) {
+      await session.update({ is_active: false });
+      return res.status(401).json({ message: 'User not found' });
+    }
+
+    if (user.status !== 'active') {
+      await session.update({ is_active: false });
+      return res.status(403).json({ message: accountStatusMessage(user.status) });
     }
 
     const newAccessToken = crypto.randomBytes(48).toString('hex');
@@ -356,6 +368,13 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    if (user.status !== 'active') {
+      user.twoFactorCode = null;
+      user.twoFactorExpires = null;
+      await user.save();
+      return res.status(403).json({ message: accountStatusMessage(user.status) });
+    }
+
     if (!user.twoFactorCode || !user.twoFactorExpires) {
       return res.status(400).json({ message: 'No 2FA code found. Please login again.' });
     }
@@ -412,7 +431,7 @@ router.post('/resend-2fa', authLimiter, async (req, res) => {
 
     const user = await User.scope('withSecrets').findByPk(userId);
 
-    if (!user || !user.twoFactorEnabled) {
+    if (!user || !user.twoFactorEnabled || user.status !== 'active') {
       return res.status(400).json({ message: 'Invalid request' });
     }
 
@@ -477,7 +496,7 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
 // @route   POST /api/auth/reset-password/:token
 // @desc    Reset password with token
 // @access  Public
-router.post('/reset-password/:token', validateResetPassword, async (req, res) => {
+router.post('/reset-password/:token', passwordResetLimiter, validateResetPassword, async (req, res) => {
   try {
     const { token } = req.params;
     const { password } = req.body;
@@ -610,12 +629,8 @@ router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
 
     const user = await User.findOne({ where: { email: email.toLowerCase() } });
 
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    if (user.emailVerified) {
-      return res.status(400).json({ message: 'Email already verified' });
+    if (!user || user.emailVerified) {
+      return res.json({ message: 'If that email needs verification, a new link has been sent.' });
     }
 
     // Generate new verification token
@@ -628,7 +643,7 @@ router.post('/resend-verification', passwordResetLimiter, async (req, res) => {
     await emailService.sendVerificationEmail(email, user.username, verificationToken);
 
     logger.info(`Verification email resent to: ${email}`);
-    res.json({ message: 'Verification email sent successfully' });
+    res.json({ message: 'If that email needs verification, a new link has been sent.' });
   } catch (error) {
     logger.error('Resend verification error:', error);
     res.status(500).json({ message: 'Error sending verification email' });
