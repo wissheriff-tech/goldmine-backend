@@ -1,7 +1,6 @@
 // Force pg into ncc bundle
 require("pg");
 const express = require('express');
-const path = require('path');
 const http = require('http');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
@@ -105,23 +104,10 @@ app.use(validateContentType); // Validate content types
 app.use(createCookieWriteGuard(isAllowedOrigin)); // CSRF-style protection for cookie-auth writes
 app.use(sanitizeProductionErrors); // Avoid exposing internal error details in production route catches
 
-// Serve uploaded files — authenticated route only (no unauthenticated static access)
-// C-2 FIX: sanitize the path segment to prevent path traversal attacks
-app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, (req, res) => {
-  // Extract only the captured path segment (everything after /uploads/)
-  const rawSegment = req.params[0] || '';
-  // Normalize and strip any leading slashes, then resolve against the uploads dir
-  const uploadsDir = path.join(__dirname, 'uploads');
-  const requestedPath = path.normalize(rawSegment).replace(/^(\.\.[/\\])+/, '');
-  const filePath = path.join(uploadsDir, requestedPath);
-  // Ensure the resolved path is still inside the uploads directory
-  if (!filePath.startsWith(uploadsDir + path.sep) && filePath !== uploadsDir) {
-    return res.status(403).json({ message: 'Access denied' });
-  }
-  res.sendFile(filePath, (err) => {
-    if (err) res.status(404).json({ message: 'File not found' });
-  });
-});
+// Legacy local upload URLs remain supported, but now use the same record-level
+// authorization as the protected file API instead of allowing any signed-in user.
+const { serveLegacyUpload } = require('./routes/files');
+app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, serveLegacyUpload);
 
 // Global Rate Limiting
 app.use('/api/', globalLimiter);
@@ -321,6 +307,7 @@ const depositRoutes = require('./routes/deposit');
 const testimonialsRoutes = require('./routes/testimonials');
 const chatRoutes = require('./routes/chat');
 const ambassadorRoutes = require('./routes/ambassador');
+const fileRoutes = require('./routes/files').router;
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
@@ -412,6 +399,7 @@ app.use('/api/batch', batchRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/deposit', depositRoutes);
+app.use('/api/files', fileRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/ambassador', ambassadorRoutes);

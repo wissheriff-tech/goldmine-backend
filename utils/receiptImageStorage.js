@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const { put: blobPut } = require('@vercel/blob');
+const { protectedFileUrl } = require('./protectedFiles');
 
 const isVercel = process.env.VERCEL === '1';
 
@@ -23,11 +24,12 @@ async function storeSanitizedReceiptImage({ file, userId, localDir, blobPrefix, 
   const safeName = `${filePrefix}_${userId}_${Date.now()}.png`;
 
   if (isVercel) {
-    const blob = await blobPut(`${blobPrefix}/${userId}/${safeName}`, safeBuffer, {
-      access: 'public',
+    const blobPath = `${blobPrefix}/${userId}/${safeName}`;
+    await blobPut(blobPath, safeBuffer, {
+      access: 'private',
       contentType: 'image/png',
     });
-    return blob.url;
+    return protectedFileUrl(`blob:${blobPath}`);
   }
 
   if (!fs.existsSync(localDir)) fs.mkdirSync(localDir, { recursive: true });
@@ -36,7 +38,7 @@ async function storeSanitizedReceiptImage({ file, userId, localDir, blobPrefix, 
   if (file.path && path.resolve(file.path) !== path.resolve(safePath)) {
     fs.promises.unlink(file.path).catch(() => {});
   }
-  return safePath;
+  return protectedFileUrl(`local:${safePath.replace(/\\/g, '/')}`);
 }
 
 module.exports = {

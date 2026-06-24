@@ -261,8 +261,6 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
 
     res.json({
       message: 'Login successful',
-      token,
-      refreshToken,
       redirectTo,
       user: await authUserPayload(user)
     });
@@ -300,7 +298,7 @@ router.post('/refresh', async (req, res) => {
 
     const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'none' : 'lax' };
     res.cookie('access_token', newAccessToken, { ...base, maxAge: accessTtl });
-    res.json({ token: newAccessToken });
+    res.json({ message: 'Token refreshed' });
   } catch (error) {
     logger.error('Token refresh error:', error);
     res.status(401).json({ message: 'Invalid refresh token' });
@@ -392,8 +390,6 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
 
     res.json({
       message: 'Login successful',
-      token,
-      refreshToken,
       redirectTo,
       user: await authUserPayload(user)
     });

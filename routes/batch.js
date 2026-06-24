@@ -5,7 +5,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { adminLimiter, financeLimiter } = require('../middleware/security');
 const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
-const { buildConversion, getNslPerUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
+const ps = require('../utils/platformSettings');
+const { buildConversion, getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 const { recordAdminAudit } = require('../utils/adminAudit');
 
 const router = express.Router();
@@ -311,15 +312,27 @@ router.post('/transactions/approve', authenticate, authorize(['superadmin', 'fin
 
           if (lockedTx.type === 'recharge') {
             const rate = await getNslPerUsdt();
-            user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + parseFloat(lockedTx.amount_NSL);
+            const grossAmountNSL = parseFloat(lockedTx.amount_NSL) || 0;
+            const feePct = user.role === 'superadmin' ? 0 : Number(await ps.get('recharge_fee_pct')) || 0;
+            const rechargeFeeNSL = feePct > 0 ? (grossAmountNSL * feePct) / 100 : 0;
+            const creditAmountNSL = grossAmountNSL - rechargeFeeNSL;
+
+            user.balance_NSL = (parseFloat(user.balance_NSL) || 0) + creditAmountNSL;
             user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
+            lockedTx.amount_usdt = nslToUsdt(grossAmountNSL, rate);
+
+            const noteParts = [lockedTx.notes, reason].filter(Boolean);
+            if (rechargeFeeNSL > 0) {
+              noteParts.push(`Fee: ${rechargeFeeNSL.toFixed(2)} NSL (${feePct}%), credited ${creditAmountNSL.toFixed(2)} NSL from gross ${grossAmountNSL.toFixed(2)} NSL`);
+            }
+            if (noteParts.length > 0) lockedTx.notes = noteParts.join(' - ');
           }
           // withdrawal: balance already deducted at submission time — no change needed here
 
           lockedTx.status = 'approved';
           lockedTx.approved_by = req.user.id;
           lockedTx.completed_at = new Date();
-          if (reason) lockedTx.notes = reason;
+          if (reason && lockedTx.type !== 'recharge') lockedTx.notes = reason;
 
           await lockedTx.save({ transaction: t });
           await user.save({ transaction: t });
