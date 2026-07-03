@@ -1,5 +1,5 @@
 const express = require('express');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const { sequelize } = require('../models');
 const User = require('../models/User');
 const { FEE } = require('../config/constants');
@@ -27,7 +27,8 @@ const {
   validateUpdateProfile
 } = require('../middleware/validation');
 
-const { transactionLimiter } = require('../middleware/security');
+const { transactionLimiter, passwordResetLimiter, kycUploadLimiter } = require('../middleware/security');
+const { recordAdminAudit } = require('../utils/adminAudit');
 
 const router = express.Router();
 
@@ -77,11 +78,11 @@ router.get('/dashboard', authenticate, async (req, res) => {
     });
   } catch (error) {
     logger.error('Dashboard error:', error);
-    res.status(500).json({ message: 'Error fetching dashboard', error: error.message });
+    res.status(500).json({ message: 'Error fetching dashboard' });
   }
 });
 
-router.put('/change-password', authenticate, async (req, res) => {
+router.put('/change-password', authenticate, passwordResetLimiter, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) {
@@ -155,7 +156,7 @@ router.get('/transactions', authenticate, async (req, res) => {
     });
   } catch (error) {
     logger.error('Transaction fetch error:', error);
-    res.status(500).json({ message: 'Error fetching transactions', error: error.message });
+    res.status(500).json({ message: 'Error fetching transactions' });
   }
 });
 
@@ -190,13 +191,16 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
       amount_NSL: amountNSL,
       amount_usdt,
       status: 'pending',
-      payment_method: payment_method || 'binance',
+      payment_method: payment_method || 'manual',
       deposit_address,
       binance_tx_id: tx_hash,
       notes: `Recharge request for ${amountNSL} NSL via ${payment_method || 'Binance'}`
     });
 
-    logger.info(`Recharge requested: ${user.phone || user.id} - ${amountNSL} NSL via ${payment_method}`);
+    logger.info(`Recharge requested: user_id=${user.id} - ${amountNSL} NSL via ${payment_method}`);
+
+    recordAdminAudit(req, { action: 'user.recharge_request', targetType: 'transaction', targetId: transaction.id, targetUserId: user.id, metadata: { amount_NSL: amountNSL, amount_usdt, payment_method: payment_method || 'manual' } })
+      .catch(err => logger.error('Audit log error (recharge):', err.message));
 
     res.status(201).json({
       message: 'Recharge request submitted successfully! Finance admin will verify and approve your payment.',
@@ -212,12 +216,12 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
     });
   } catch (error) {
     logger.error('Recharge error:', error);
-    res.status(500).json({ message: 'Error processing recharge', error: error.message });
+    res.status(500).json({ message: 'Error processing recharge' });
   }
 });
 
 // Calculate withdrawal fees (preview)
-router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
+router.post('/withdraw/calculate-fee', authenticate, transactionLimiter, async (req, res) => {
   try {
     const { amount_NSL } = req.body;
     const user = await User.findByPk(req.user.id);
@@ -266,7 +270,7 @@ router.post('/withdraw/calculate-fee', authenticate, async (req, res) => {
     });
   } catch (error) {
     logger.error('Fee calculation error:', error);
-    res.status(500).json({ message: 'Error calculating fees', error: error.message });
+    res.status(500).json({ message: 'Error calculating fees' });
   }
 });
 
@@ -277,6 +281,12 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
 
     if (!withdrawal_address) {
       return res.status(400).json({ message: 'Withdrawal address is required' });
+    }
+
+    const withdrawNet = (network || 'BSC').toUpperCase();
+    const addressRegex = { BSC: /^0x[a-fA-F0-9]{40}$/, ETH: /^0x[a-fA-F0-9]{40}$/, TRC20: /^T[a-zA-Z0-9]{33}$/ };
+    if (addressRegex[withdrawNet] && !addressRegex[withdrawNet].test(withdrawal_address)) {
+      return res.status(400).json({ message: `Invalid ${withdrawNet} address format` });
     }
 
     const minWithdrawal = parseInt(process.env.MIN_WITHDRAWAL_AMOUNT_NSL || 100);
@@ -290,11 +300,29 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
       const user = await User.findOne({ where: { id: req.user.id }, lock: t.LOCK.UPDATE, transaction: t });
       if (!user) { const e = new Error('User not found'); e.status = 404; throw e; }
 
+      if (user.role === 'superadmin') {
+        logger.warn(`AUDIT: Superadmin withdrawal bypass — user_id=${user.id} phone=${user.phone} amount_NSL=${amount_NSL} address=${withdrawal_address} network=${network || 'BSC'} ip=${req.ip}`);
+      }
+
       if (user.role !== 'superadmin' && !user.kyc_verified) {
         const e = new Error('Identity verification required before withdrawal. Please complete KYC in your account settings.');
         e.status = 403;
         e.kyc_required = true;
         throw e;
+      }
+
+      if (user.role !== 'superadmin') {
+        const cashout = await getCashoutStatus(user.id, user.kyc_verified);
+        if (!cashout.conditions.all_ok) {
+          const reasons = [];
+          if (!cashout.conditions.earned_ok)   reasons.push(`Earn at least ${cashout.min_nsl} NSL from the system (you have ${cashout.total_earned_NSL.toFixed(2)} NSL)`);
+          if (!cashout.conditions.referrals_ok) reasons.push(`Invite ${cashout.min_referrals} users who recharged and bought VIP (you have ${cashout.qualifying_referrals})`);
+          if (!cashout.conditions.kyc_ok)       reasons.push('Complete KYC verification');
+          const e = new Error('You do not yet meet the cash-out requirements: ' + reasons.join('; '));
+          e.status = 403;
+          e.cashout_conditions = cashout.conditions;
+          throw e;
+        }
       }
 
       const feePctW = user.role === 'superadmin' ? 0 : await ps.get('withdrawal_fee_pct');
@@ -334,12 +362,17 @@ router.post('/withdraw', authenticate, transactionLimiter, validateWithdraw, asy
         notes: `Withdrawal: ${amount_NSL} NSL (Fee: ${withdrawalFee.toFixed(2)} NSL, Net: ${netAmount.toFixed(2)} NSL) to ${withdrawal_address}`,
       }, { transaction: t });
 
-      logger.info(`Withdrawal requested: ${user.phone || user.id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${withdrawal_address}`);
+      const maskedAddr = `${withdrawal_address.substring(0, 6)}...${withdrawal_address.slice(-4)}`;
+      logger.info(`Withdrawal requested: user_id=${user.id} - ${amount_NSL} NSL (Net: ${netAmount} NSL, Fee: ${withdrawalFee.toFixed(2)} NSL) to ${maskedAddr}`);
 
       result = { tx, user, withdrawalFee, netAmount, amount_usdt, conversionRate };
     });
 
     const { tx, user, withdrawalFee, netAmount, amount_usdt, conversionRate } = result;
+
+    recordAdminAudit(req, { action: 'user.withdrawal_request', targetType: 'transaction', targetId: tx.id, targetUserId: user.id, metadata: { amount_NSL, net_amount_NSL: netAmount, fee_NSL: withdrawalFee, network: network || 'BSC' } })
+      .catch(err => logger.error('Audit log error (withdrawal):', err.message));
+
     res.status(201).json({
       message: 'Withdrawal request submitted! Finance admin will process your withdrawal within 24 hours.',
       transaction: {
@@ -398,7 +431,7 @@ router.get('/referrals', authenticate, async (req, res) => {
     });
   } catch (error) {
     logger.error('Referrals fetch error:', error);
-    res.status(500).json({ message: 'Error fetching referrals', error: error.message });
+    res.status(500).json({ message: 'Error fetching referrals' });
   }
 });
 
@@ -489,12 +522,12 @@ router.get('/referrals/leaderboard', authenticate, async (req, res) => {
     });
   } catch (error) {
     logger.error('Leaderboard fetch error:', error);
-    res.status(500).json({ message: 'Error fetching leaderboard', error: error.message });
+    res.status(500).json({ message: 'Error fetching leaderboard' });
   }
 });
 
 // Update user profile
-router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => {
+router.put('/profile', authenticate, transactionLimiter, validateUpdateProfile, async (req, res) => {
   try {
     const { username, email, phone } = req.body;
     const user = await User.findByPk(req.user.id);
@@ -544,7 +577,7 @@ router.put('/profile', authenticate, validateUpdateProfile, async (req, res) => 
     });
   } catch (error) {
     logger.error('Profile update error:', error);
-    res.status(500).json({ message: 'Error updating profile', error: error.message });
+    res.status(500).json({ message: 'Error updating profile' });
   }
 });
 
@@ -601,12 +634,12 @@ router.post('/transactions/:id/upload-payment-proof', authenticate, paymentUploa
       fs.unlinkSync(req.file.path);
     }
     logger.error('Payment proof upload error:', error);
-    res.status(500).json({ message: 'Error uploading payment proof', error: error.message });
+    res.status(500).json({ message: 'Error uploading payment proof' });
   }
 });
 
 // Upload KYC documents (supports multiple documents)
-router.post('/kyc/upload', authenticate, kycUpload.fields([
+router.post('/kyc/upload', authenticate, kycUploadLimiter, kycUpload.fields([
   { name: 'id_front', maxCount: 1 },
   { name: 'id_back', maxCount: 1 },
   { name: 'selfie', maxCount: 1 },
@@ -653,6 +686,19 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
     await user.save();
     logger.info(`KYC documents uploaded for user ${user.id}: ${Object.keys(uploadedDocs).join(', ')}`);
 
+    // Notify admins/finance/verificators of new KYC submission (fire-and-forget)
+    User.findAll({
+      where: { role: { [Op.in]: ['admin', 'superadmin', 'finance', 'verificator'] }, status: 'active' },
+      attributes: ['id']
+    }).then(staffUsers => {
+      if (staffUsers.length === 0) return;
+      const ids = staffUsers.map(s => s.id);
+      return notificationService.createBulk(ids, 'kyc_submission', 'New KYC Submission',
+        `${user.username || user.phone} has submitted KYC documents for review.`,
+        { priority: 'high', icon: 'badge', action_url: '/admin?tab=kyc', data: { user_id: user.id } }
+      );
+    }).catch(err => logger.error('KYC admin notification error:', err));
+
     res.json({
       message: 'KYC documents uploaded successfully',
       uploaded_documents: uploadedDocs,
@@ -666,7 +712,7 @@ router.post('/kyc/upload', authenticate, kycUpload.fields([
     });
   } catch (error) {
     logger.error('KYC upload error:', error);
-    res.status(500).json({ message: 'Error uploading KYC documents', error: error.message });
+    res.status(500).json({ message: 'Error uploading KYC documents' });
   }
 });
 
@@ -703,7 +749,58 @@ router.get('/kyc/status', authenticate, async (req, res) => {
     });
   } catch (error) {
     logger.error('KYC status fetch error:', error);
-    res.status(500).json({ message: 'Error fetching KYC status', error: error.message });
+    res.status(500).json({ message: 'Error fetching KYC status' });
+  }
+});
+
+// Helper: compute cashout eligibility for a user
+async function getCashoutStatus(userId, kycVerified) {
+  const settings = await ps.getAll();
+  const minNsl       = parseFloat(settings.cashout_min_nsl   || 150);
+  const minReferrals = parseInt(settings.cashout_min_referrals || 5);
+
+  const [incomeAgg, qualCount] = await Promise.all([
+    Transaction.findOne({
+      attributes: [[sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']],
+      where: { user_id: userId, type: 'income' },
+      raw: true,
+    }),
+    sequelize.query(
+      `SELECT COUNT(DISTINCT r.referred_id) AS cnt
+       FROM referrals r
+       WHERE r.referrer_id = :uid
+         AND EXISTS (SELECT 1 FROM transactions t WHERE t.user_id = r.referred_id AND t.type = 'recharge')
+         AND EXISTS (SELECT 1 FROM user_products up2 WHERE up2.user_id = r.referred_id)`,
+      { replacements: { uid: userId }, type: QueryTypes.SELECT }
+    ),
+  ]);
+
+  const totalEarned   = parseFloat(incomeAgg?.total || 0);
+  const qualReferrals = parseInt(qualCount?.[0]?.cnt || 0);
+  const earnedOk      = totalEarned  >= minNsl;
+  const referralsOk   = qualReferrals >= minReferrals;
+  const kycOk         = !!kycVerified;
+
+  return {
+    total_earned_NSL: totalEarned,
+    qualifying_referrals: qualReferrals,
+    min_nsl: minNsl,
+    min_referrals: minReferrals,
+    conditions: { earned_ok: earnedOk, referrals_ok: referralsOk, kyc_ok: kycOk, all_ok: earnedOk && referralsOk && kycOk },
+  };
+}
+
+// Check own cashout eligibility
+router.get('/cashout-check', authenticate, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id, { attributes: ['id', 'kyc_verified', 'role'] });
+    if (!user) return res.status(404).json({ message: 'User not found' });
+    if (user.role === 'superadmin') return res.json({ eligible: true, superadmin: true });
+    const status = await getCashoutStatus(user.id, user.kyc_verified);
+    res.json({ eligible: status.conditions.all_ok, ...status });
+  } catch (error) {
+    logger.error('Cashout check error:', error);
+    res.status(500).json({ message: 'Error checking cashout eligibility' });
   }
 });
 

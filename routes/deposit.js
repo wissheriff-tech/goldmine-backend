@@ -15,6 +15,7 @@ const ps = require('../utils/platformSettings');
 const { getNslPerUsdt, usdtToNsl, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 const { storeSanitizedReceiptImage } = require('../utils/receiptImageStorage');
 const { notifyDepositReviewers } = require('../utils/depositReviewNotifications');
+const { recordAdminAudit } = require('../utils/adminAudit');
 const {
   sanitizeReceiptSubmission,
   validateDepositReceipt,
@@ -131,6 +132,11 @@ router.get('/wallet-info', authenticate, async (req, res) => {
 router.get('/payment-methods', authenticate, async (req, res) => {
   try {
     const settings = await getPaymentSettings();
+    const parseAgentCodes = (raw) => {
+      try { return JSON.parse(raw || '[]').filter(c => c.active); } catch { return []; }
+    };
+    const omRow = await PaymentSetting.findOne({ where: { key: 'om_agent_codes' } });
+    const afRow = await PaymentSetting.findOne({ where: { key: 'africell_agent_codes' } });
     res.json({
       success: true,
       data: {
@@ -138,6 +144,8 @@ router.get('/payment-methods', authenticate, async (req, res) => {
         africell_number: settings.africell_number || null,
         binance_wallet_address: settings.binance_wallet_address || process.env.DEPOSIT_WALLET_ADDRESS || null,
         binance_network: settings.binance_network || 'TRC20 (USDT)',
+        om_agent_codes: parseAgentCodes(omRow?.value),
+        africell_agent_codes: parseAgentCodes(afRow?.value),
       }
     });
   } catch (error) {
@@ -218,6 +226,9 @@ router.post('/submit', authenticate, depositLimiter, upload.single('receipt'), a
     }).catch(error => logger.error('Deposit reviewer notification failed:', error));
 
     logger.info(`Deposit proof submitted by user ${req.user.id}: ${receipt.amount} USDT`);
+
+    recordAdminAudit(req, { action: 'user.deposit_submit', targetType: 'deposit', targetId: proof.id, targetUserId: req.user.id, metadata: { amount: receipt.amount, currency: 'USDT', reference_id: receipt.reference_id } })
+      .catch(err => logger.error('Audit log error (deposit-submit):', err.message));
 
     res.status(201).json({
       success: true,

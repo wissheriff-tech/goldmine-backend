@@ -1,6 +1,7 @@
 const express = require('express');
-const { User, Product, UserProduct, Transaction, DepositProof, PaymentSetting, sequelize } = require('../models');
-const { Op } = require('sequelize');
+const { User, Product, UserProduct, Transaction, DepositProof, PaymentSetting, AdminAuditLog, sequelize } = require('../models');
+const { Op, QueryTypes } = require('sequelize');
+const Session = require('../models/Session');
 const bcrypt = require('bcryptjs');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
@@ -27,8 +28,7 @@ const {
   validateAdminResetPassword
 } = require('../middleware/validation');
 
-// --- MODIFIED: Added resetLimitsForIP to imports ---
-const { adminLimiter, resetLimitsForIP } = require('../middleware/security');
+const { adminLimiter, resetLimitsForIP, requireSuperadmin2FA } = require('../middleware/security');
 
 const router = express.Router();
 
@@ -84,7 +84,7 @@ router.get('/users', authenticate, authorize(['superadmin']), async (req, res) =
     });
   } catch (error) {
     logger.error('Users fetch error:', error);
-    res.status(500).json({ message: 'Error fetching users', error: error.message });
+    res.status(500).json({ message: 'Error fetching users' });
   }
 });
 
@@ -117,12 +117,12 @@ router.get('/users/:id', authenticate, authorize(['superadmin']), async (req, re
     });
   } catch (error) {
     logger.error('User details fetch error:', error);
-    res.status(500).json({ message: 'Error fetching user details', error: error.message });
+    res.status(500).json({ message: 'Error fetching user details' });
   }
 });
 
 // Admin: Assign role
-router.patch('/users/:id/role', authenticate, authorize(['superadmin']), adminLimiter, validateUpdateRole, async (req, res) => {
+router.patch('/users/:id/role', authenticate, authorize(['superadmin']), requireSuperadmin2FA, adminLimiter, validateUpdateRole, async (req, res) => {
   try {
     const { role, ambassador_region, ambassador_sector } = req.body;
     const validRoles = ['user', 'admin', 'finance', 'verificator', 'approval', 'superadmin', 'ambassador'];
@@ -173,12 +173,12 @@ router.patch('/users/:id/role', authenticate, authorize(['superadmin']), adminLi
     });
   } catch (error) {
     logger.error('Role update error:', error);
-    res.status(500).json({ message: 'Error updating user role', error: error.message });
+    res.status(500).json({ message: 'Error updating user role' });
   }
 });
 
 // Admin: Freeze/Unfreeze account
-router.patch('/users/:id/status', authenticate, authorize(['superadmin']), adminLimiter, validateUpdateStatus, async (req, res) => {
+router.patch('/users/:id/status', authenticate, authorize(['superadmin']), requireSuperadmin2FA, adminLimiter, validateUpdateStatus, async (req, res) => {
   try {
     const { status } = req.body;
     const validStatuses = ['active', 'frozen', 'pending'];
@@ -235,7 +235,7 @@ router.patch('/users/:id/status', authenticate, authorize(['superadmin']), admin
     });
   } catch (error) {
     logger.error('Status update error:', error);
-    res.status(500).json({ message: 'Error updating user status', error: error.message });
+    res.status(500).json({ message: 'Error updating user status' });
   }
 });
 
@@ -350,7 +350,7 @@ router.patch('/users/:id/balance', authenticate, authorize(['superadmin', 'admin
     });
   } catch (error) {
     logger.error('Balance adjustment error:', error);
-    res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Error adjusting balance', error: error.message });
+    res.status(error.statusCode || 500).json({ message: error.statusCode ? error.message : 'Error adjusting balance' });
   }
 });
 
@@ -404,12 +404,12 @@ router.patch('/users/:id/vip', authenticate, authorize(['superadmin']), adminLim
     });
   } catch (error) {
     logger.error('VIP level update error:', error);
-    res.status(500).json({ message: 'Error updating VIP level', error: error.message });
+    res.status(500).json({ message: 'Error updating VIP level' });
   }
 });
 
 // Admin: Create new user
-router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, validateCreateUser, async (req, res) => {
+router.post('/users', authenticate, authorize(['superadmin']), requireSuperadmin2FA, adminLimiter, validateCreateUser, async (req, res) => {
   try {
     const { username, phone, password, role = 'user', status = 'active', ambassador_region, ambassador_sector } = req.body;
 
@@ -444,7 +444,7 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
     await sendAccountNotification('Admin-created account', () => notificationService.notifyAccountUpdated(
       user.id,
       'Account Created',
-      'Your SalonMoney account was created by an administrator.',
+      'Your Gold Mine account was created by an administrator.',
       { priority: 'high', action_url: '/dashboard', data: { created_by: req.user.id } }
     ));
 
@@ -471,14 +471,14 @@ router.post('/users', authenticate, authorize(['superadmin']), adminLimiter, val
     });
   } catch (error) {
     logger.error('User creation error:', error);
-    res.status(500).json({ message: 'Error creating user', error: error.message });
+    res.status(500).json({ message: 'Error creating user' });
   }
 });
 
 // Admin: Delete user
 
 // Super Admin: Create admin/superadmin users
-router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
+router.post('/create-admin', authenticate, authorize(['superadmin']), requireSuperadmin2FA, adminLimiter, async (req, res) => {
   try {
     const { username, phone, email, password, role, ambassador_region, ambassador_sector } = req.body;
 
@@ -554,15 +554,11 @@ router.post('/create-admin', authenticate, authorize(['superadmin']), adminLimit
     });
   } catch (error) {
     logger.error('Admin creation error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error creating admin user',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Error creating admin user' });
   }
 });
 
-router.delete('/users/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+router.delete('/users/:id', authenticate, authorize(['superadmin']), requireSuperadmin2FA, async (req, res) => {
   try {
     const user = await User.findByPk(req.params.id);
 
@@ -595,7 +591,7 @@ router.delete('/users/:id', authenticate, authorize(['superadmin']), async (req,
     });
   } catch (error) {
     logger.error('User deletion error:', error);
-    res.status(500).json({ message: 'Error deleting user', error: error.message });
+    res.status(500).json({ message: 'Error deleting user' });
   }
 });
 
@@ -636,7 +632,7 @@ router.get('/transactions', authenticate, authorize(['superadmin']), async (req,
     });
   } catch (error) {
     logger.error('Transactions fetch error:', error);
-    res.status(500).json({ message: 'Error fetching transactions', error: error.message });
+    res.status(500).json({ message: 'Error fetching transactions' });
   }
 });
 
@@ -656,7 +652,7 @@ router.get('/products', authenticate, authorize(['superadmin', 'admin']), async 
     });
   } catch (error) {
     logger.error('Products fetch error:', error);
-    res.status(500).json({ message: 'Error fetching products', error: error.message });
+    res.status(500).json({ message: 'Error fetching products' });
   }
 });
 
@@ -718,7 +714,7 @@ router.get('/products/stats', authenticate, authorize(['superadmin', 'admin']), 
     });
   } catch (error) {
     logger.error('Product stats error:', error);
-    res.status(500).json({ message: 'Error fetching product statistics', error: error.message });
+    res.status(500).json({ message: 'Error fetching product statistics' });
   }
 });
 
@@ -772,7 +768,7 @@ router.post('/products', authenticate, authorize(['superadmin', 'admin']), async
     });
   } catch (error) {
     logger.error('Product creation error:', error);
-    res.status(500).json({ message: 'Error creating product', error: error.message });
+    res.status(500).json({ message: 'Error creating product' });
   }
 });
 
@@ -780,13 +776,14 @@ router.post('/products', authenticate, authorize(['superadmin', 'admin']), async
 router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { price_NSL, daily_income_NSL, active, description, validity_days } = req.body;
+    const { price_NSL, daily_income_NSL, tax_income_NSL, active, description, validity_days } = req.body;
     const updates = {};
-    if (price_NSL       !== undefined) updates.price_NSL = price_NSL;
+    if (price_NSL        !== undefined) updates.price_NSL = price_NSL;
     if (daily_income_NSL !== undefined) updates.daily_income_NSL = daily_income_NSL;
-    if (active          !== undefined) updates.active = active;
-    if (description     !== undefined) updates.description = description;
-    if (validity_days   !== undefined) updates.validity_days = validity_days;
+    if (tax_income_NSL   !== undefined) updates.tax_income_NSL = tax_income_NSL;
+    if (active           !== undefined) updates.active = active;
+    if (description      !== undefined) updates.description = description;
+    if (validity_days    !== undefined) updates.validity_days = validity_days;
 
     if (updates.price_NSL) {
       const nslPerUsdt = await getNslPerUsdt();
@@ -816,7 +813,7 @@ router.patch('/products/:id', authenticate, authorize(['superadmin', 'admin']), 
     });
   } catch (error) {
     logger.error('Product update error:', error);
-    res.status(500).json({ message: 'Error updating product', error: error.message });
+    res.status(500).json({ message: 'Error updating product' });
   }
 });
 
@@ -849,7 +846,7 @@ router.delete('/products/:id', authenticate, authorize(['superadmin', 'admin']),
     });
   } catch (error) {
     logger.error('Product deletion error:', error);
-    res.status(500).json({ message: 'Error deactivating product', error: error.message });
+    res.status(500).json({ message: 'Error deactivating product' });
   }
 });
 
@@ -880,7 +877,7 @@ router.patch('/products/:id/toggle', authenticate, authorize(['superadmin', 'adm
     });
   } catch (error) {
     logger.error('Product toggle error:', error);
-    res.status(500).json({ message: 'Error toggling product status', error: error.message });
+    res.status(500).json({ message: 'Error toggling product status' });
   }
 });
 
@@ -915,7 +912,7 @@ router.patch('/products/:id/toggle-active', authenticate, authorize(['superadmin
     });
   } catch (error) {
     logger.error('Product toggle error:', error);
-    res.status(500).json({ message: 'Error toggling product', error: error.message });
+    res.status(500).json({ message: 'Error toggling product' });
   }
 });
 
@@ -948,7 +945,7 @@ router.patch('/products/:id/suspend', authenticate, authorize(['superadmin', 'ad
     });
   } catch (error) {
     logger.error('Product suspension error:', error);
-    res.status(500).json({ message: 'Error suspending product', error: error.message });
+    res.status(500).json({ message: 'Error suspending product' });
   }
 });
 
@@ -994,14 +991,14 @@ router.put('/products/:id', authenticate, authorize(['superadmin', 'admin']), as
     });
   } catch (error) {
     logger.error('Product update error:', error);
-    res.status(500).json({ message: 'Error updating product', error: error.message });
+    res.status(500).json({ message: 'Error updating product' });
   }
 });
 
 // ============ SUPERADMIN PASSWORD RESET ============
 
 // Superadmin: Reset user password
-router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']), adminLimiter, validateAdminResetPassword, async (req, res) => {
+router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']), requireSuperadmin2FA, adminLimiter, validateAdminResetPassword, async (req, res) => {
   try {
     const { new_password } = req.body;
     const user = await User.findByPk(req.params.id);
@@ -1014,9 +1011,11 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
       return res.status(400).json({ message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character' });
     }
 
-    // Update password (will be hashed by beforeUpdate hook if configured)
     user.password_hash = new_password;
     await user.save();
+
+    // Kill all sessions for the target user — their tokens are no longer valid
+    await Session.update({ is_active: false }, { where: { user_id: user.id, is_active: true } });
 
     await sendAccountNotification('Admin password reset', () => notificationService.notifyPasswordReset(user.id, 'admin'));
 
@@ -1040,7 +1039,7 @@ router.patch('/users/:id/reset-password', authenticate, authorize(['superadmin']
     });
   } catch (error) {
     logger.error('Password reset error:', error);
-    res.status(500).json({ message: 'Error resetting password', error: error.message });
+    res.status(500).json({ message: 'Error resetting password' });
   }
 });
 
@@ -1082,7 +1081,7 @@ router.patch('/users/:id/phone', authenticate, authorize(['superadmin']), adminL
     res.json({ message: 'Phone number updated', user: { id: user.id, phone: user.phone, username: user.username } });
   } catch (error) {
     logger.error('Phone update error:', error);
-    res.status(500).json({ message: 'Error updating phone number', error: error.message });
+    res.status(500).json({ message: 'Error updating phone number' });
   }
 });
 
@@ -1147,7 +1146,7 @@ router.get('/rate-limit-info', authenticate, authorize(['superadmin']), (req, re
     res.json(rateLimitInfo);
   } catch (error) {
     logger.error('Rate limit info error:', error);
-    res.status(500).json({ message: 'Error fetching rate limit info', error: error.message });
+    res.status(500).json({ message: 'Error fetching rate limit info' });
   }
 });
 
@@ -1183,13 +1182,13 @@ router.post('/reset-limits', authenticate, authorize(['superadmin']), async (req
     });
   } catch (error) {
     logger.error('Rate limit reset error:', error);
-    res.status(500).json({ message: 'Error processing rate limit reset', error: error.message });
+    res.status(500).json({ message: 'Error processing rate limit reset' });
   }
 });
 // ----------------------------
 
 // KYC: List users with pending review (docs uploaded, not yet verified)
-router.get('/kyc/pending', authenticate, authorize(['superadmin', 'admin']), async (req, res) => {
+router.get('/kyc/pending', authenticate, authorize(['superadmin', 'admin', 'finance']), async (req, res) => {
   try {
     const users = await User.findAll({
       where: {
@@ -1211,7 +1210,7 @@ router.get('/kyc/pending', authenticate, authorize(['superadmin', 'admin']), asy
 });
 
 // KYC: Approve a user's documents
-router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'admin']), adminLimiter, async (req, res) => {
+router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'admin', 'finance']), adminLimiter, async (req, res) => {
   try {
     const user = await User.findByPk(req.params.userId, {
       attributes: { exclude: ['password_hash'] }
@@ -1245,7 +1244,7 @@ router.patch('/kyc/:userId/approve', authenticate, authorize(['superadmin', 'adm
 });
 
 // KYC: Reject a user's documents
-router.patch('/kyc/:userId/reject', authenticate, authorize(['superadmin', 'admin']), adminLimiter, async (req, res) => {
+router.patch('/kyc/:userId/reject', authenticate, authorize(['superadmin', 'admin', 'finance']), adminLimiter, async (req, res) => {
   try {
     const { reason = 'Revoked by admin' } = req.body;
 
@@ -1322,6 +1321,78 @@ router.put('/payment-settings', authenticate, authorize(['superadmin']), async (
   }
 });
 
+// ── Agent Codes Management ────────────────────────────────────────────────────
+
+const AGENT_CODE_KEYS = { orange_money: 'om_agent_codes', africell: 'africell_agent_codes' };
+
+const getAgentCodes = async (provider) => {
+  const key = AGENT_CODE_KEYS[provider];
+  if (!key) return [];
+  const row = await PaymentSetting.findOne({ where: { key } });
+  try { return JSON.parse(row?.value || '[]'); } catch { return []; }
+};
+
+const saveAgentCodes = async (provider, codes, adminId) => {
+  const key = AGENT_CODE_KEYS[provider];
+  await PaymentSetting.upsert({ key, value: JSON.stringify(codes), updated_by: adminId });
+};
+
+router.get('/agent-codes', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const [om, africell] = await Promise.all([getAgentCodes('orange_money'), getAgentCodes('africell')]);
+    res.json({ success: true, data: { orange_money: om, africell } });
+  } catch (error) {
+    logger.error('Get agent codes error:', error);
+    res.status(500).json({ message: 'Error fetching agent codes' });
+  }
+});
+
+router.post('/agent-codes', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const { provider, code, label } = req.body;
+    if (!AGENT_CODE_KEYS[provider]) return res.status(400).json({ message: 'Invalid provider' });
+    if (!code?.trim()) return res.status(400).json({ message: 'Agent code is required' });
+    const codes = await getAgentCodes(provider);
+    const newEntry = { id: Date.now().toString(), code: code.trim(), label: label?.trim() || '', active: true };
+    codes.push(newEntry);
+    await saveAgentCodes(provider, codes, req.user.id);
+    res.json({ success: true, data: newEntry });
+  } catch (error) {
+    logger.error('Add agent code error:', error);
+    res.status(500).json({ message: 'Error adding agent code' });
+  }
+});
+
+router.patch('/agent-codes/:id/toggle', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const { provider } = req.body;
+    if (!AGENT_CODE_KEYS[provider]) return res.status(400).json({ message: 'Invalid provider' });
+    const codes = await getAgentCodes(provider);
+    const idx = codes.findIndex(c => c.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ message: 'Agent code not found' });
+    codes[idx] = { ...codes[idx], active: !codes[idx].active };
+    await saveAgentCodes(provider, codes, req.user.id);
+    res.json({ success: true, data: codes[idx] });
+  } catch (error) {
+    logger.error('Toggle agent code error:', error);
+    res.status(500).json({ message: 'Error toggling agent code' });
+  }
+});
+
+router.delete('/agent-codes/:id', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const { provider } = req.body;
+    if (!AGENT_CODE_KEYS[provider]) return res.status(400).json({ message: 'Invalid provider' });
+    const codes = await getAgentCodes(provider);
+    const filtered = codes.filter(c => c.id !== req.params.id);
+    await saveAgentCodes(provider, filtered, req.user.id);
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Delete agent code error:', error);
+    res.status(500).json({ message: 'Error deleting agent code' });
+  }
+});
+
 // ── Mobile Money Deposit Management ──────────────────────────────────────────
 
 // GET /api/admin/mobile-deposits/pending — list pending Orange Money + Africell deposits
@@ -1381,7 +1452,31 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
         await tx.save({ transaction: t });
         await user.save({ transaction: t });
 
-        result = { txType: 'deposit', creditNSL, user, baseNSL, feePercent, rate };
+        // First deposit bonus: auto-applied if this is user's first deposit and was submitted within 1h of registration
+        let firstDepositBonus = 0;
+        const priorRecharges = await Transaction.count({
+          where: { user_id: user.id, type: 'recharge', status: 'approved', id: { [Op.ne]: tx.id } },
+          transaction: t,
+        });
+        const depositAgeMs = new Date(tx.created_at) - new Date(user.created_at);
+        if (priorRecharges === 0 && depositAgeMs >= 0 && depositAgeMs <= 60 * 60 * 1000) {
+          firstDepositBonus = parseFloat(await ps.get('first_deposit_bonus_NSL')) || 100;
+          user.balance_NSL = parseFloat(user.balance_NSL) + firstDepositBonus;
+          user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
+          await user.save({ transaction: t });
+          await Transaction.create({
+            user_id: user.id,
+            type: 'income',
+            amount_NSL: firstDepositBonus,
+            amount_usdt: nslToUsdt(firstDepositBonus, rate),
+            status: 'completed',
+            description: 'First deposit bonus',
+            reference_id: `first_deposit_bonus_${user.id}_${Date.now()}`,
+          }, { transaction: t });
+          logger.info(`First deposit bonus: ${firstDepositBonus} NSL to user ${user.id}`);
+        }
+
+        result = { txType: 'deposit', creditNSL, user, baseNSL, feePercent, rate, firstDepositBonus };
         logger.info(`Deposit ${tx.id} approved by admin ${req.user.username}: ${baseNSL} NSL → ${creditNSL} credited to user ${user.username}`);
       }
     });
@@ -1529,6 +1624,8 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
       'recharge_fee_pct', 'withdrawal_fee_pct',
       'exchange_rate_nsl_per_usdt',
       'dur_short', 'dur_week', 'dur_month', 'dur_promo', 'dur_promo_label',
+      'daily_checkin_reward_NSL', 'explore_vip_reward_NSL', 'first_deposit_bonus_NSL',
+      'vip_tax_daily_count', 'show_checkin_reward',
     ];
 
     for (const key of allowed) {
@@ -1540,7 +1637,10 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
       });
     }
 
-    ps.invalidate(); // clear cache so next read is fresh
+    ps.invalidate();
+    if (req.body.exchange_rate_nsl_per_usdt !== undefined) {
+      await refreshExchangeRate({ force: true });
+    }
     const updated = await ps.getAll();
     logger.info(`Platform settings updated by ${req.user.phone}`);
     await recordAdminAudit(req, {
@@ -1602,6 +1702,377 @@ router.post('/sync-usdt-balances', authenticate, authorize(['superadmin']), admi
   } catch (error) {
     logger.error('USDT balance sync error:', error);
     res.status(500).json({ message: 'Error syncing USDT balances' });
+  }
+});
+
+// Admin: Net profit overview (superadmin only)
+router.get('/net-profit', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const inTypes = ['recharge', 'purchase', 'renewal'];
+    const outTypes = ['withdrawal', 'income', 'referral_bonus'];
+    const approvedStatuses = ['approved', 'completed'];
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    const [totalIn, totalOut, monthIn, monthOut] = await Promise.all([
+      Transaction.sum('amount_NSL', {
+        where: { type: { [Op.in]: inTypes }, status: { [Op.in]: approvedStatuses } }
+      }),
+      Transaction.sum('amount_NSL', {
+        where: { type: { [Op.in]: outTypes }, status: { [Op.in]: approvedStatuses } }
+      }),
+      Transaction.sum('amount_NSL', {
+        where: { type: { [Op.in]: inTypes }, status: { [Op.in]: approvedStatuses }, created_at: { [Op.gte]: monthStart } }
+      }),
+      Transaction.sum('amount_NSL', {
+        where: { type: { [Op.in]: outTypes }, status: { [Op.in]: approvedStatuses }, created_at: { [Op.gte]: monthStart } }
+      }),
+    ]);
+
+    const allTimeIn = parseFloat(totalIn) || 0;
+    const allTimeOut = parseFloat(totalOut) || 0;
+    const thisMonthIn = parseFloat(monthIn) || 0;
+    const thisMonthOut = parseFloat(monthOut) || 0;
+
+    res.json({
+      all_time: {
+        revenue_in: allTimeIn,
+        revenue_out: allTimeOut,
+        net_profit: allTimeIn - allTimeOut,
+      },
+      this_month: {
+        revenue_in: thisMonthIn,
+        revenue_out: thisMonthOut,
+        net_profit: thisMonthIn - thisMonthOut,
+      },
+    });
+  } catch (error) {
+    logger.error('Net profit error:', error);
+    res.status(500).json({ message: 'Error fetching net profit data' });
+  }
+});
+
+// Admin: User payouts list (active product holders with due amounts)
+router.get('/payouts', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 20), 100);
+    const skip = Math.max(0, parseInt(req.query.skip) || 0);
+
+    const { count, rows } = await UserProduct.findAndCountAll({
+      where: { is_active: true },
+      limit,
+      offset: skip,
+      order: [['expires_at', 'ASC']],
+      include: [
+        { model: User, as: 'user', attributes: ['id', 'username', 'phone'] },
+        { model: Product, as: 'product', attributes: ['id', 'name', 'daily_income_NSL', 'validity_days', 'price_NSL'] },
+      ],
+    });
+
+    const now = Date.now();
+    const payouts = rows.map(up => {
+      const expiresAt = new Date(up.expires_at);
+      const purchasedAt = new Date(up.purchase_date);
+      const totalDays = up.product.validity_days;
+      const daysElapsed = Math.max(0, Math.floor((now - purchasedAt.getTime()) / 86400000));
+      const daysRemaining = Math.max(0, Math.ceil((expiresAt.getTime() - now) / 86400000));
+      const totalPayout = parseFloat(up.product.daily_income_NSL) * totalDays;
+      const alreadyPaid = parseFloat(up.product.daily_income_NSL) * Math.min(daysElapsed, totalDays);
+      const remaining = Math.max(0, totalPayout - alreadyPaid);
+
+      return {
+        id: up.id,
+        user: up.user,
+        product_name: up.product.name,
+        daily_income_NSL: up.product.daily_income_NSL,
+        purchase_date: up.purchase_date,
+        expires_at: up.expires_at,
+        days_remaining: daysRemaining,
+        total_payout_NSL: totalPayout,
+        already_paid_NSL: alreadyPaid,
+        remaining_NSL: remaining,
+      };
+    });
+
+    res.json({ payouts, total: count, limit, skip });
+  } catch (error) {
+    logger.error('Payouts error:', error);
+    res.status(500).json({ message: 'Error fetching payouts data' });
+  }
+});
+
+// VIP Ledger — paginated list of VIP purchases with earnings
+router.get('/vip-ledger', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
+  try {
+    const page   = Math.max(1, parseInt(req.query.page) || 1);
+    const limit  = Math.min(Math.max(1, parseInt(req.query.limit) || 20), 100);
+    const offset = (page - 1) * limit;
+    const { month, search } = req.query;
+
+    const upWhere = {};
+    if (month && /^\d{4}-\d{2}$/.test(month)) {
+      const [year, mon] = month.split('-').map(Number);
+      upWhere.purchase_date = {
+        [Op.gte]: new Date(year, mon - 1, 1),
+        [Op.lt]:  new Date(year, mon,     1),
+      };
+    }
+
+    const userInclude = { model: User, as: 'user', attributes: ['id', 'username', 'phone'] };
+    if (search && search.trim()) {
+      const like = `%${search.trim()}%`;
+      userInclude.where = { [Op.or]: [{ phone: { [Op.like]: like } }, { username: { [Op.like]: like } }] };
+      userInclude.required = true;
+    }
+
+    const { count, rows } = await UserProduct.findAndCountAll({
+      where: upWhere,
+      limit,
+      offset,
+      distinct: true,
+      order: [['purchase_date', 'DESC']],
+      include: [
+        userInclude,
+        { model: Product, as: 'product', attributes: ['id', 'name', 'price_NSL', 'price_usdt', 'tax_income_NSL'] },
+      ],
+    });
+
+    const ledger = await Promise.all(rows.map(async (up) => {
+      const agg = await Transaction.findOne({
+        attributes: [
+          [sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total_earned'],
+          [sequelize.fn('COUNT', sequelize.col('id')),       'review_count'],
+        ],
+        where: { reference_id: { [Op.like]: `vip_tax_${up.id}_%` } },
+        raw: true,
+      });
+
+      return {
+        id:            up.id,
+        user:          { id: up.user?.id, username: up.user?.username, phone: up.user?.phone },
+        product:       { name: up.product?.name, price_NSL: parseFloat(up.product?.price_NSL || 0), price_usdt: parseFloat(up.product?.price_usdt || 0) },
+        purchase_date: up.purchase_date,
+        expires_at:    up.expires_at,
+        is_active:     up.is_active,
+        total_earned_NSL: parseFloat(agg?.total_earned || 0),
+        review_count:     parseInt(agg?.review_count   || 0),
+      };
+    }));
+
+    res.json({ success: true, ledger, total: count, page, limit, pages: Math.ceil(count / limit) });
+  } catch (error) {
+    logger.error('VIP ledger error:', error);
+    res.status(500).json({ message: 'Error fetching VIP ledger' });
+  }
+});
+
+// Payment Status — active subscriptions (earning) vs expired (matured/ready to pay)
+router.get('/payment-status', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
+  try {
+    const now = new Date();
+    const baseInclude = [
+      { model: User,    as: 'user',    attributes: ['id', 'username', 'phone'] },
+      { model: Product, as: 'product', attributes: ['id', 'name', 'price_NSL', 'price_usdt'] },
+    ];
+
+    const userInclude = [
+      { model: User,    as: 'user',    attributes: ['id', 'username', 'phone', 'kyc_verified'] },
+      { model: Product, as: 'product', attributes: ['id', 'name', 'price_NSL', 'price_usdt'] },
+    ];
+
+    const [earningRows, maturedRows] = await Promise.all([
+      UserProduct.findAll({
+        where: { is_active: true, expires_at: { [Op.gte]: now } },
+        order: [['expires_at', 'ASC']],
+        limit: 200,
+        include: userInclude,
+      }),
+      UserProduct.findAll({
+        where: { expires_at: { [Op.lt]: now } },
+        order: [['expires_at', 'DESC']],
+        limit: 200,
+        include: userInclude,
+      }),
+    ]);
+
+    const enrich = async (rows, withRemaining) => Promise.all(rows.map(async (up) => {
+      const agg = await Transaction.findOne({
+        attributes: [
+          [sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total_earned'],
+          [sequelize.fn('COUNT', sequelize.col('id')),       'tx_count'],
+        ],
+        where: { user_id: up.user?.id, type: 'income' },
+        raw: true,
+      });
+      return {
+        id:              up.id,
+        user:            { id: up.user?.id, username: up.user?.username, phone: up.user?.phone, kyc_verified: up.user?.kyc_verified },
+        product:         { name: up.product?.name, price_NSL: parseFloat(up.product?.price_NSL || 0), price_usdt: parseFloat(up.product?.price_usdt || 0) },
+        purchase_date:   up.purchase_date,
+        expires_at:      up.expires_at,
+        total_earned_NSL: parseFloat(agg?.total_earned || 0),
+        tx_count:        parseInt(agg?.tx_count || 0),
+        ...(withRemaining && { days_remaining: Math.max(0, Math.ceil((new Date(up.expires_at) - now) / 86400000)) }),
+      };
+    }));
+
+    const [earning, matured] = await Promise.all([enrich(earningRows, true), enrich(maturedRows, false)]);
+    res.json({ success: true, earning, matured });
+  } catch (error) {
+    logger.error('Payment status error:', error);
+    res.status(500).json({ message: 'Error fetching payment status' });
+  }
+});
+
+// Cash-out eligibility — per-user condition check
+router.get('/cashout-eligibility', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
+  try {
+    const [settings, users] = await Promise.all([
+      ps.getAll(),
+      User.findAll({
+        where: { role: { [Op.notIn]: ['superadmin', 'finance'] } },
+        attributes: ['id', 'username', 'phone', 'kyc_verified', 'referred_by'],
+        order: [['id', 'DESC']],
+        limit: 500,
+      }),
+    ]);
+
+    const minNsl       = parseFloat(settings.cashout_min_nsl   || 150);
+    const minReferrals = parseInt(settings.cashout_min_referrals || 5);
+
+    const results = await Promise.all(users.map(async (u) => {
+      const [incomeAgg, qualCount] = await Promise.all([
+        Transaction.findOne({
+          attributes: [[sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']],
+          where: { user_id: u.id, type: 'income' },
+          raw: true,
+        }),
+        // Count referrals who have both recharged AND bought VIP
+        sequelize.query(
+          `SELECT COUNT(DISTINCT r.referred_id) AS cnt
+           FROM referrals r
+           WHERE r.referrer_id = :uid
+             AND EXISTS (SELECT 1 FROM transactions t WHERE t.user_id = r.referred_id AND t.type = 'recharge')
+             AND EXISTS (SELECT 1 FROM user_products up2 WHERE up2.user_id = r.referred_id)`,
+          { replacements: { uid: u.id }, type: QueryTypes.SELECT }
+        ),
+      ]);
+
+      const totalEarned    = parseFloat(incomeAgg?.total || 0);
+      const qualReferrals  = parseInt(qualCount?.[0]?.cnt || 0);
+      const earnedOk       = totalEarned  >= minNsl;
+      const referralsOk    = qualReferrals >= minReferrals;
+      const kycOk          = !!u.kyc_verified;
+
+      return {
+        id: u.id, username: u.username, phone: u.phone, kyc_verified: kycOk,
+        total_earned_NSL: totalEarned,
+        qualifying_referrals: qualReferrals,
+        conditions: { earned_ok: earnedOk, referrals_ok: referralsOk, kyc_ok: kycOk, all_ok: earnedOk && referralsOk && kycOk },
+      };
+    }));
+
+    res.json({
+      success: true,
+      thresholds: { min_nsl: minNsl, min_referrals: minReferrals },
+      users: results,
+    });
+  } catch (error) {
+    logger.error('Cashout eligibility error:', error);
+    res.status(500).json({ message: 'Error fetching cashout eligibility' });
+  }
+});
+
+// GET /api/admin/activity-log — superadmin only: users with activity summary for per-user dropdown view
+router.get('/activity-log', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 30);
+    const offset = (page - 1) * limit;
+    const search = req.query.search?.trim();
+
+    const userWhere = {};
+    if (search) {
+      userWhere[Op.or] = [
+        { username: { [Op.iLike]: `%${search}%` } },
+        { phone: { [Op.iLike]: `%${search}%` } },
+      ];
+    }
+
+    const { count, rows: users } = await User.findAndCountAll({
+      where: userWhere,
+      attributes: ['id', 'username', 'phone', 'role', 'last_login', 'created_at'],
+      order: [['last_login', 'DESC NULLS LAST'], ['created_at', 'DESC']],
+      limit,
+      offset,
+    });
+
+    const userIds = users.map(u => u.id);
+    let summaryMap = {};
+    if (userIds.length > 0) {
+      const activitySummary = await AdminAuditLog.findAll({
+        where: { actor_user_id: { [Op.in]: userIds } },
+        attributes: [
+          'actor_user_id',
+          [sequelize.fn('COUNT', sequelize.col('id')), 'action_count'],
+          [sequelize.fn('MAX', sequelize.col('created_at')), 'last_action_at'],
+        ],
+        group: ['actor_user_id'],
+        raw: true,
+      });
+      activitySummary.forEach(row => {
+        summaryMap[row.actor_user_id] = {
+          action_count: parseInt(row.action_count),
+          last_action_at: row.last_action_at,
+        };
+      });
+    }
+
+    const data = users.map(u => ({
+      ...u.toJSON(),
+      action_count: summaryMap[u.id]?.action_count || 0,
+      last_action_at: summaryMap[u.id]?.last_action_at || null,
+    }));
+
+    res.json({ success: true, data, total: count, page, limit });
+  } catch (error) {
+    logger.error('Activity log fetch error:', error);
+    res.status(500).json({ message: 'Error fetching activity log' });
+  }
+});
+
+router.get('/audit-logs', authenticate, authorize(['superadmin']), async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 50);
+    const offset = (page - 1) * limit;
+    const where = {};
+    if (req.query.action) where.action = { [Op.iLike]: `%${req.query.action}%` };
+    if (req.query.actor_id) where.actor_user_id = req.query.actor_id;
+    if (req.query.target_user_id) where.target_user_id = req.query.target_user_id;
+    if (req.query.status) where.status = req.query.status;
+    if (req.query.from || req.query.to) {
+      where.created_at = {};
+      if (req.query.from) where.created_at[Op.gte] = new Date(req.query.from);
+      if (req.query.to) where.created_at[Op.lte] = new Date(req.query.to);
+    }
+
+    const { count, rows } = await AdminAuditLog.findAndCountAll({
+      where,
+      include: [
+        { model: User, as: 'actor', attributes: ['id', 'username', 'phone'], required: false },
+        { model: User, as: 'targetUser', attributes: ['id', 'username', 'phone'], required: false },
+      ],
+      order: [['created_at', 'DESC']],
+      limit,
+      offset,
+    });
+
+    res.json({ success: true, data: rows, total: count, page, limit });
+  } catch (error) {
+    logger.error('Audit log fetch error:', error);
+    res.status(500).json({ message: 'Error fetching audit logs' });
   }
 });
 

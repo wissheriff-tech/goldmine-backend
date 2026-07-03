@@ -8,6 +8,7 @@ const { authenticate } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
+const { recordAdminAudit } = require('../utils/adminAudit');
 const { getNslPerUsdt, nslToUsdt } = require('../utils/currencyConversion');
 
 const ACCESS_TOKEN_TTL_MS  = parseInt(process.env.ACCESS_TOKEN_TTL_MS  || String(24 * 60 * 60 * 1000));
@@ -45,22 +46,34 @@ const setCookies = (res, accessToken, refreshToken, rememberMe = false) => {
   res.cookie('refresh_token', refreshToken, { ...base, maxAge: refreshMaxAge, path: '/api/auth/refresh' });
 };
 
-const issueTokens = async (user, rememberMe = false, deviceInfo = null) => {
+const MAX_CONCURRENT_SESSIONS = 5;
+
+const issueTokens = async (user, rememberMe = false, deviceInfo = null, twoFactorVerified = false) => {
   const accessToken  = crypto.randomBytes(48).toString('hex');
   const refreshToken = crypto.randomBytes(48).toString('hex');
   const now = Date.now();
   const accessTtl  = rememberMe ? REMEMBER_ME_ACCESS_TTL_MS  : ACCESS_TOKEN_TTL_MS;
   const refreshTtl = rememberMe ? REMEMBER_ME_REFRESH_TTL_MS : REFRESH_TOKEN_TTL_MS;
 
+  // Cap concurrent sessions: evict oldest if at limit
+  const activeSessions = await Session.findAll({
+    where: { user_id: user.id, is_active: true },
+    order: [['last_activity', 'ASC']]
+  });
+  if (activeSessions.length >= MAX_CONCURRENT_SESSIONS) {
+    await activeSessions[0].update({ is_active: false });
+  }
+
   await Session.create({
-    user_id:           user.id,
-    access_token:      hashToken(accessToken),
-    refresh_token:     hashToken(refreshToken),
-    is_active:         true,
-    last_activity:     new Date(now),
-    access_expires_at: new Date(now + accessTtl),
-    expires_at:        new Date(now + refreshTtl),
-    device_info:       deviceInfo
+    user_id:            user.id,
+    access_token:       hashToken(accessToken),
+    refresh_token:      hashToken(refreshToken),
+    is_active:          true,
+    last_activity:      new Date(now),
+    access_expires_at:  new Date(now + accessTtl),
+    expires_at:         new Date(now + refreshTtl),
+    device_info:        deviceInfo,
+    twoFactorVerified
   });
 
   return { token: accessToken, refreshToken, accessExpiresAt: new Date(now + accessTtl) };
@@ -78,7 +91,8 @@ const {
 const {
   authLimiter,
   signupLimiter,
-  passwordResetLimiter
+  passwordResetLimiter,
+  changePasswordLimiter
 } = require('../middleware/security');
 
 const router = express.Router();
@@ -117,6 +131,23 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
     const referrer = isMasterCode ? null : await User.findOne({ where: { referral_code: code } });
     if (!isMasterCode && !referrer) {
       return res.status(400).json({ message: 'Invalid invite code. Please check and try again.' });
+    }
+
+    // Depth-limited chain walk: detect circular referral loops (max 5 hops)
+    if (referrer) {
+      let ancestorCode = referrer.referred_by;
+      for (let depth = 0; depth < 5 && ancestorCode; depth++) {
+        const ancestor = await User.findOne({
+          where: { referral_code: ancestorCode },
+          attributes: ['phone', 'referred_by']
+        });
+        if (!ancestor) break;
+        if (ancestor.phone === phone) {
+          logger.warn(`Circular referral blocked: phone=${phone} used code=${code} chain_depth=${depth + 1}`);
+          return res.status(400).json({ message: 'Invalid invite code' });
+        }
+        ancestorCode = ancestor.referred_by;
+      }
     }
 
     const userExists = await User.findOne({
@@ -195,7 +226,7 @@ router.post('/signup', signupLimiter, validateSignup, async (req, res) => {
     }
   } catch (error) {
     logger.error('Signup error:', error);
-    res.status(500).json({ message: 'Error registering user', error: error.message });
+    res.status(500).json({ message: 'Error registering user' });
   }
 });
 
@@ -217,8 +248,20 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
+    // Account lockout check
+    if (user.locked_until && new Date() < new Date(user.locked_until)) {
+      const remaining = Math.ceil((new Date(user.locked_until) - Date.now()) / 60000);
+      return res.status(423).json({ message: `Account locked due to too many failed attempts. Try again in ${remaining} minute(s).` });
+    }
+
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
+      user.failed_login_attempts = (user.failed_login_attempts || 0) + 1;
+      if (user.failed_login_attempts >= 5) {
+        user.locked_until = new Date(Date.now() + 15 * 60 * 1000);
+        logger.warn(`Account locked after failed attempts: ${user.phone}`);
+      }
+      await user.save();
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
@@ -248,27 +291,42 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
     }
 
     user.last_login = new Date();
+    user.failed_login_attempts = 0;
+    user.locked_until = null;
     await user.save();
 
-    const { token, refreshToken } = await issueTokens(user, rememberMe, req.headers['user-agent']);
+    const { token, refreshToken } = await issueTokens(user, rememberMe, { ua: req.headers['user-agent'], ip: req.ip });
     setCookies(res, token, refreshToken, rememberMe);
 
     logger.info(`User logged in: ${identifier} (${user.role})`);
 
+    req.user = { id: user.id, username: user.username, role: user.role };
+    recordAdminAudit(req, { action: 'user.login', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { method: 'password' } })
+      .catch(err => logger.error('Audit log error (login):', err.message));
+
+    if (user.role === 'superadmin' && user.email) {
+      emailService.sendSuperadminLoginAlert(user.email, user.username, req.ip, req.headers['user-agent'])
+        .catch(err => logger.error('Superadmin login alert email failed:', err.message));
+    }
+
     let redirectTo = '/dashboard';
     if (user.role === 'ambassador') redirectTo = '/ambassador';
-    if (user.role === 'superadmin' || user.role === 'admin' || user.role === 'finance') redirectTo = '/admin';
+    if (user.role === 'finance') redirectTo = '/finance';
+    if (user.role === 'superadmin' || user.role === 'admin') redirectTo = '/admin';
+
+    const twoFactorSetupRequired = user.role === 'superadmin' && !user.twoFactorEnabled;
 
     res.json({
       message: 'Login successful',
       token,
       refreshToken,
       redirectTo,
+      twoFactorSetupRequired,
       user: await authUserPayload(user)
     });
   } catch (error) {
     logger.error('Login error:', error);
-    res.status(500).json({ message: 'Error during login', error: error.message });
+    res.status(500).json({ message: 'Error during login' });
   }
 });
 
@@ -290,17 +348,21 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ message: 'Invalid or expired refresh token' });
     }
 
-    const newAccessToken = crypto.randomBytes(48).toString('hex');
-    const accessTtl = ACCESS_TOKEN_TTL_MS;
+    const newAccessToken  = crypto.randomBytes(48).toString('hex');
+    const newRefreshToken = crypto.randomBytes(48).toString('hex');
+    const accessTtl  = ACCESS_TOKEN_TTL_MS;
+    const remainingRefreshMs = Math.max(0, session.expires_at - Date.now());
     await session.update({
       access_token:      hashToken(newAccessToken),
+      refresh_token:     hashToken(newRefreshToken),
       access_expires_at: new Date(Date.now() + accessTtl),
       last_activity:     new Date()
     });
 
     const base = { httpOnly: true, secure: IS_PROD, sameSite: IS_PROD ? 'none' : 'lax' };
-    res.cookie('access_token', newAccessToken, { ...base, maxAge: accessTtl });
-    res.json({ token: newAccessToken });
+    res.cookie('access_token',  newAccessToken,  { ...base, maxAge: accessTtl });
+    res.cookie('refresh_token', newRefreshToken, { ...base, maxAge: remainingRefreshMs, path: '/api/auth/refresh' });
+    res.json({ token: newAccessToken, refreshToken: newRefreshToken });
   } catch (error) {
     logger.error('Token refresh error:', error);
     res.status(401).json({ message: 'Invalid refresh token' });
@@ -308,7 +370,7 @@ router.post('/refresh', async (req, res) => {
 });
 
 // Change password
-router.post('/change-password', authenticate, validateChangePassword, async (req, res) => {
+router.post('/change-password', authenticate, changePasswordLimiter, validateChangePassword, async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
     const user = await User.scope('withSecrets').findByPk(req.user.id);
@@ -325,17 +387,26 @@ router.post('/change-password', authenticate, validateChangePassword, async (req
     user.password_hash = newPassword;
     await user.save();
 
+    // Invalidate all other sessions so stolen tokens can't be reused
+    await Session.update(
+      { is_active: false },
+      { where: { user_id: user.id, id: { [Op.ne]: req.sessionId }, is_active: true } }
+    );
+
     try {
       await notificationService.notifyPasswordChanged(user.id);
     } catch (notifyError) {
       logger.error('Password change notification error:', notifyError);
     }
 
+    recordAdminAudit(req, { action: 'user.change_password', targetType: 'user', targetId: user.id, targetUserId: user.id })
+      .catch(err => logger.error('Audit log error (change-password):', err.message));
+
     logger.info(`Password changed for user: ${user.phone}`);
     res.json({ message: 'Password changed successfully' });
   } catch (error) {
     logger.error('Change password error:', error);
-    res.status(500).json({ message: 'Error changing password', error: error.message });
+    res.status(500).json({ message: 'Error changing password' });
   }
 });
 
@@ -368,7 +439,11 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
 
     const codeMatch = await bcrypt.compare(code, user.twoFactorCode);
     if (!codeMatch) {
-      return res.status(401).json({ message: 'Invalid 2FA code' });
+      // Immediately expire code to prevent brute force across requests
+      user.twoFactorCode = null;
+      user.twoFactorExpires = null;
+      await user.save();
+      return res.status(401).json({ message: 'Invalid 2FA code. Please login again.' });
     }
 
     // Clear 2FA code
@@ -377,16 +452,22 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
     user.last_login = new Date();
     await user.save();
 
-    const { token, refreshToken } = await issueTokens(user, shouldRemember, req.headers['user-agent']);
+    const { token, refreshToken } = await issueTokens(user, shouldRemember, { ua: req.headers['user-agent'], ip: req.ip }, true);
     setCookies(res, token, refreshToken, shouldRemember);
 
     logger.info(`User completed 2FA login: ${user.username}`);
+
+    req.user = { id: user.id, username: user.username, role: user.role };
+    recordAdminAudit(req, { action: 'user.login', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { method: '2fa' } })
+      .catch(err => logger.error('Audit log error (2fa-login):', err.message));
 
     // Determine redirect path based on role
     let redirectTo = '/dashboard';
     if (user.role === 'ambassador') {
       redirectTo = '/ambassador';
-    } else if (user.role === 'superadmin' || user.role === 'admin' || user.role === 'finance') {
+    } else if (user.role === 'finance') {
+      redirectTo = '/finance';
+    } else if (user.role === 'superadmin' || user.role === 'admin') {
       redirectTo = '/admin';
     }
 
@@ -399,7 +480,7 @@ router.post('/verify-2fa', authLimiter, async (req, res) => {
     });
   } catch (error) {
     logger.error('2FA verification error:', error);
-    res.status(500).json({ message: 'Error verifying 2FA code', error: error.message });
+    res.status(500).json({ message: 'Error verifying 2FA code' });
   }
 });
 
@@ -474,7 +555,7 @@ router.post('/forgot-password', passwordResetLimiter, async (req, res) => {
     res.json({ message: 'If that email exists, a password reset link has been sent.' });
   } catch (error) {
     logger.error('Forgot password error:', error);
-    res.status(500).json({ message: 'Error processing request', error: error.message });
+    res.status(500).json({ message: 'Error processing request' });
   }
 });
 
@@ -505,10 +586,17 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
       return res.status(400).json({ message: 'Invalid or expired reset token' });
     }
 
-    // Set new password
+    // Atomically consume token — prevents concurrent reuse via race condition
+    const [consumed] = await User.update(
+      { resetPasswordToken: null, resetPasswordExpires: null },
+      { where: { id: user.id, resetPasswordToken: hashToken(token) } }
+    );
+    if (!consumed) {
+      return res.status(400).json({ message: 'Invalid or expired reset token' });
+    }
+
+    // Token consumed — safely set new password
     user.password_hash = password;
-    user.resetPasswordToken = null;
-    user.resetPasswordExpires = null;
     await user.save();
     await Session.update({ is_active: false }, { where: { user_id: user.id } });
 
@@ -522,7 +610,7 @@ router.post('/reset-password/:token', validateResetPassword, async (req, res) =>
     res.json({ message: 'Password reset successful. You can now login.' });
   } catch (error) {
     logger.error('Reset password error:', error);
-    res.status(500).json({ message: 'Error resetting password', error: error.message });
+    res.status(500).json({ message: 'Error resetting password' });
   }
 });
 
@@ -555,7 +643,7 @@ router.post('/toggle-2fa', authenticate, async (req, res) => {
     });
   } catch (error) {
     logger.error('Toggle 2FA error:', error);
-    res.status(500).json({ message: 'Error toggling 2FA', error: error.message });
+    res.status(500).json({ message: 'Error toggling 2FA' });
   }
 });
 
