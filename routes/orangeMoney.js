@@ -10,7 +10,7 @@ const logger  = require('../utils/logger');
 const { FEE } = require('../config/constants');
 const ps = require('../utils/platformSettings');
 const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
-const { put: blobPut } = require('@vercel/blob');
+const { storeSanitizedReceiptImage } = require('../utils/receiptImageStorage');
 const isVercel = process.env.VERCEL === '1';
 
 const router = express.Router();
@@ -65,16 +65,13 @@ router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single
 
     let screenshotPath = null;
     if (req.file) {
-      if (isVercel) {
-        const ext = path.extname(req.file.originalname) || '.jpg';
-        const blob = await blobPut(`payments/${req.user.id}/${Date.now()}${ext}`, req.file.buffer, {
-          access: 'public',
-          contentType: req.file.mimetype,
-        });
-        screenshotPath = blob.url;
-      } else {
-        screenshotPath = req.file.path;
-      }
+      screenshotPath = await storeSanitizedReceiptImage({
+        file: req.file,
+        userId: req.user.id,
+        localDir: 'uploads/payments',
+        blobPrefix: 'payments',
+        filePrefix: paymentMethod,
+      });
     }
 
     await Transaction.create({

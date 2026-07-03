@@ -88,7 +88,10 @@ function planToProductSeed(plan, rate, validityDays = 7) {
   };
 }
 
-function buildPlanBusinessSummary(plan, { rate, days, rechargeFeePct, withdrawalFeePct }) {
+function buildPlanBusinessSummary(plan, { rate, days, rechargeFeePct, withdrawalFeePct, referralPcts = [] }) {
+  const referralPctTotal = round(referralPcts
+    .map((pct) => Number(pct) || 0)
+    .reduce((sum, pct) => sum + pct, 0));
   const depositMultiplier = Math.max(0.0001, 1 - Number(rechargeFeePct || 0) / 100);
   const requiredDepositNSL = round(plan.price_NSL / depositMultiplier);
   const depositFeeNSL = round(requiredDepositNSL - plan.price_NSL);
@@ -96,7 +99,11 @@ function buildPlanBusinessSummary(plan, { rate, days, rechargeFeePct, withdrawal
   const withdrawalFeeNSL = round(totalRewardNSL * Number(withdrawalFeePct || 0) / 100);
   const userNetRewardNSL = round(totalRewardNSL - withdrawalFeeNSL);
   const planMarginNSL = round(plan.price_NSL - totalRewardNSL);
-  const companyBenefitNSL = round(planMarginNSL + depositFeeNSL + withdrawalFeeNSL);
+  const grossCompanyBenefitNSL = round(planMarginNSL + depositFeeNSL + withdrawalFeeNSL);
+  const depositReferralCommissionNSL = round(requiredDepositNSL * referralPctTotal / 100);
+  const purchaseReferralCommissionNSL = round(plan.price_NSL * referralPctTotal / 100);
+  const totalReferralCommissionNSL = round(depositReferralCommissionNSL + purchaseReferralCommissionNSL);
+  const companyNetBenefitNSL = round(grossCompanyBenefitNSL - totalReferralCommissionNSL);
 
   return {
     name: plan.name,
@@ -113,8 +120,16 @@ function buildPlanBusinessSummary(plan, { rate, days, rechargeFeePct, withdrawal
     withdrawal_fee_on_reward_NSL: withdrawalFeeNSL,
     user_net_reward_after_withdrawal_NSL: userNetRewardNSL,
     company_plan_margin_NSL: planMarginNSL,
-    company_total_benefit_NSL: companyBenefitNSL,
-    company_total_benefit_usdt: nslToUsdt(companyBenefitNSL, rate),
+    company_gross_benefit_before_referrals_NSL: grossCompanyBenefitNSL,
+    referral_total_pct: referralPctTotal,
+    estimated_deposit_referral_commission_NSL: depositReferralCommissionNSL,
+    estimated_purchase_referral_commission_NSL: purchaseReferralCommissionNSL,
+    estimated_total_referral_commission_NSL: totalReferralCommissionNSL,
+    assumes_full_three_level_referral_chain: referralPctTotal > 0,
+    company_total_benefit_NSL: companyNetBenefitNSL,
+    company_net_profit_NSL: companyNetBenefitNSL,
+    company_total_benefit_usdt: nslToUsdt(companyNetBenefitNSL, rate),
+    company_net_profit_usdt: nslToUsdt(companyNetBenefitNSL, rate),
   };
 }
 
@@ -132,14 +147,19 @@ function buildVipBusinessSummary(settings, rate) {
       recharge_fee_pct: Number(settings.recharge_fee_pct) || 0,
       withdrawal_fee_pct: Number(settings.withdrawal_fee_pct) || 0,
     },
+    referral: {
+      l1_pct: Number(settings.referral_l1_pct) || 0,
+      l2_pct: Number(settings.referral_l2_pct) || 0,
+      l3_pct: Number(settings.referral_l3_pct) || 0,
+    },
     durations,
     plans: VIP_PRODUCT_PLANS.map(plan => ({
       ...plan,
       by_duration: {
-        short: buildPlanBusinessSummary(plan, { rate, days: durations.short, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct }),
-        week: buildPlanBusinessSummary(plan, { rate, days: durations.week, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct }),
-        month: buildPlanBusinessSummary(plan, { rate, days: durations.month, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct }),
-        promo: buildPlanBusinessSummary(plan, { rate, days: durations.promo, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct }),
+        short: buildPlanBusinessSummary(plan, { rate, days: durations.short, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct, referralPcts: [settings.referral_l1_pct, settings.referral_l2_pct, settings.referral_l3_pct] }),
+        week: buildPlanBusinessSummary(plan, { rate, days: durations.week, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct, referralPcts: [settings.referral_l1_pct, settings.referral_l2_pct, settings.referral_l3_pct] }),
+        month: buildPlanBusinessSummary(plan, { rate, days: durations.month, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct, referralPcts: [settings.referral_l1_pct, settings.referral_l2_pct, settings.referral_l3_pct] }),
+        promo: buildPlanBusinessSummary(plan, { rate, days: durations.promo, rechargeFeePct: settings.recharge_fee_pct, withdrawalFeePct: settings.withdrawal_fee_pct, referralPcts: [settings.referral_l1_pct, settings.referral_l2_pct, settings.referral_l3_pct] }),
       },
     })),
   };

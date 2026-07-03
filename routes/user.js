@@ -14,11 +14,16 @@ const logger = require('../utils/logger');
 const notificationService = require('../utils/notificationService');
 const { getNslPerUsdt, nslToUsdt, syncUsdtBalanceFromNsl } = require('../utils/currencyConversion');
 const { paymentUpload, kycUpload, assertImageMagicBytes, assertDocumentMagicBytes } = require('../middleware/upload');
+const { storeSanitizedReceiptImage } = require('../utils/receiptImageStorage');
+const { protectedFileUrl } = require('../utils/protectedFiles');
 const path = require('path');
 const fs = require('fs');
 const { put: blobPut } = require('@vercel/blob');
 const isVercel = process.env.VERCEL === '1';
 const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
+const purgeUpload = (file) => {
+  if (file?.path) fs.unlink(file.path, () => {});
+};
 
 // Validation and Security Middleware
 const {
@@ -591,32 +596,29 @@ router.post('/transactions/:id/upload-payment-proof', authenticate, paymentUploa
     const transaction = await Transaction.findByPk(req.params.id);
 
     if (!transaction) {
-      fs.unlinkSync(req.file.path);
+      purgeUpload(req.file);
       return res.status(404).json({ message: 'Transaction not found' });
     }
 
     // Verify the transaction belongs to the user
     if (transaction.user_id !== parseInt(req.user.id)) {
-      fs.unlinkSync(req.file.path);
+      purgeUpload(req.file);
       return res.status(403).json({ message: 'Unauthorized access to transaction' });
     }
 
     // Only allow upload for pending transactions
     if (transaction.status !== 'pending') {
-      fs.unlinkSync(req.file.path);
+      purgeUpload(req.file);
       return res.status(400).json({ message: 'Can only upload payment proof for pending transactions' });
     }
 
-    // Delete old payment proof if exists
-    if (transaction.payment_proof) {
-      const oldProofPath = path.join(__dirname, '../', transaction.payment_proof);
-      if (fs.existsSync(oldProofPath)) {
-        fs.unlinkSync(oldProofPath);
-      }
-    }
-
-    // Save new payment proof path
-    const proofUrl = `/uploads/payments/${req.file.filename}`;
+    const proofUrl = await storeSanitizedReceiptImage({
+      file: req.file,
+      userId: req.user.id,
+      localDir: 'uploads/payments',
+      blobPrefix: 'payments',
+      filePrefix: 'payment',
+    });
     transaction.payment_proof = proofUrl;
     await transaction.save();
 
@@ -630,9 +632,7 @@ router.post('/transactions/:id/upload-payment-proof', authenticate, paymentUploa
       }
     });
   } catch (error) {
-    if (req.file) {
-      fs.unlinkSync(req.file.path);
-    }
+    purgeUpload(req.file);
     logger.error('Payment proof upload error:', error);
     res.status(500).json({ message: 'Error uploading payment proof' });
   }
@@ -665,18 +665,14 @@ router.post('/kyc/upload', authenticate, kycUploadLimiter, kycUpload.fields([
         // On Vercel: stream buffer to Vercel Blob
         const ext = path.extname(file.originalname) || '.jpg';
         const blobPath = `kyc/${user.id}/${fieldName}-${Date.now()}${ext}`;
-        const blob = await blobPut(blobPath, file.buffer, {
-          access: 'public',
+        await blobPut(blobPath, file.buffer, {
+          access: 'private',
           contentType: file.mimetype,
         });
-        docUrl = blob.url;
+        docUrl = protectedFileUrl(`blob:${blobPath}`);
       } else {
         // Local: file already written to disk by multer
-        if (user[kycField]) {
-          const oldPath = path.join(__dirname, '../', user[kycField]);
-          if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
-        }
-        docUrl = `/uploads/kyc/${file.filename}`;
+        docUrl = protectedFileUrl(`local:uploads/kyc/${file.filename}`);
       }
 
       user[kycField] = docUrl;

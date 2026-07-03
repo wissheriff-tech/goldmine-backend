@@ -261,7 +261,7 @@ router.get('/sessions', authenticate, async (req, res) => {
         user_id: req.user.id,
         is_active: true
       },
-      attributes: { exclude: ['refresh_token'] },
+      attributes: { exclude: ['access_token', 'refresh_token'] },
       order: [['last_activity', 'DESC']]
     });
 

@@ -1,8 +1,8 @@
 // Force pg into ncc bundle
 require("pg");
 const express = require('express');
-const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
@@ -22,7 +22,8 @@ const {
   validateContentType,
   createCookieWriteGuard,
   sanitizeProductionErrors,
-  preventParameterPollution
+  preventParameterPollution,
+  passwordResetLimiter
 } = require('./middleware/security');
 const { authenticate } = require('./middleware/auth');
 
@@ -44,6 +45,13 @@ const getSuperAdminConfig = () => ({
   email: (process.env.SUPER_ADMIN_EMAIL || SUPER_ADMIN_DEFAULTS.email).trim().toLowerCase(),
   password: process.env.SUPER_ADMIN_PASSWORD
 });
+
+const isStrongPassword = (value) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(value || ''));
+const timingSafeEqualString = (left, right) => {
+  const leftBuffer = Buffer.from(String(left || ''));
+  const rightBuffer = Buffer.from(String(right || ''));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+};
 
 // Check if running on Vercel (serverless)
 const isVercel = process.env.VERCEL === '1';
@@ -105,34 +113,22 @@ app.use(validateContentType); // Validate content types
 app.use(createCookieWriteGuard(isAllowedOrigin)); // CSRF-style protection for cookie-auth writes
 app.use(sanitizeProductionErrors); // Avoid exposing internal error details in production route catches
 
-// Serve uploaded files — authenticated route only (no unauthenticated static access)
-// C-2 FIX: sanitize the path segment to prevent path traversal attacks
-app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, (req, res) => {
-  // Extract only the captured path segment (everything after /uploads/)
-  const rawSegment = req.params[0] || '';
-  // Normalize and strip any leading slashes, then resolve against the uploads dir
-  const uploadsDir = path.join(__dirname, 'uploads');
-  const requestedPath = path.normalize(rawSegment).replace(/^(\.\.[/\\])+/, '');
-  const filePath = path.join(uploadsDir, requestedPath);
-  // Ensure the resolved path is still inside the uploads directory
-  if (!filePath.startsWith(uploadsDir + path.sep) && filePath !== uploadsDir) {
-    return res.status(403).json({ message: 'Access denied' });
-  }
-  res.sendFile(filePath, (err) => {
-    if (err) res.status(404).json({ message: 'File not found' });
-  });
-});
+// Legacy local upload URLs remain supported, but now use the same record-level
+// authorization as the protected file API instead of allowing any signed-in user.
+const { serveLegacyUpload } = require('./routes/files');
+app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, serveLegacyUpload);
 
 // Global Rate Limiting
 app.use('/api/', globalLimiter);
 
 // Database Connection
-let sequelize, User, Product;
+let sequelize, User, Product, Session;
 try {
   const models = require('./models');
   sequelize = models.sequelize;
   User = models.User;
   Product = models.Product;
+  Session = models.Session;
   console.log('Models loaded OK. NODE_ENV:', process.env.NODE_ENV);
 } catch (modelErr) {
   console.error('MODELS LOAD FAILED:', modelErr.message, modelErr.stack);
@@ -321,6 +317,7 @@ const depositRoutes = require('./routes/deposit');
 const testimonialsRoutes = require('./routes/testimonials');
 const chatRoutes = require('./routes/chat');
 const ambassadorRoutes = require('./routes/ambassador');
+const fileRoutes = require('./routes/files').router;
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
@@ -412,6 +409,7 @@ app.use('/api/batch', batchRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/deposit', depositRoutes);
+app.use('/api/files', fileRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/ambassador', ambassadorRoutes);
@@ -430,15 +428,19 @@ app.get(['/admin', '/superadmin'], (req, res) => {
 });
 
 // Secret-protected superadmin password reset (emergency use only)
-app.post('/api/reset-admin-password', async (req, res) => {
+app.post('/api/reset-admin-password', passwordResetLimiter, async (req, res) => {
   const { secret, new_password } = req.body;
   const resetSecret = process.env.RESET_SECRET;
-  if (!resetSecret || secret !== resetSecret) return res.status(403).json({ message: 'Forbidden' });
+  if (!resetSecret || !timingSafeEqualString(secret, resetSecret)) return res.status(403).json({ message: 'Forbidden' });
+  if (!isStrongPassword(new_password)) {
+    return res.status(400).json({ message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character' });
+  }
   try {
     const admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
     if (!admin) return res.status(404).json({ message: 'Superadmin not found' });
     admin.password_hash = new_password;
     await admin.save();
+    await Session.update({ is_active: false }, { where: { user_id: admin.id } });
     res.json({ message: 'Password reset', username: admin.username });
   } catch (err) {
     res.status(500).json({ message: err.message });

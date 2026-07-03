@@ -35,7 +35,13 @@ const authenticate = async (req, res, next) => {
 
     const user = await User.findByPk(session.user_id);
     if (!user) {
+      await session.update({ is_active: false });
       return res.status(401).json({ message: 'User not found' });
+    }
+
+    if (user.status !== 'active') {
+      await session.update({ is_active: false });
+      return res.status(403).json({ message: 'Account is not active' });
     }
 
     await session.update({ last_activity: new Date() });
@@ -44,7 +50,8 @@ const authenticate = async (req, res, next) => {
       id: user.id,
       username: user.username,
       phone: user.phone,
-      role: user.role
+      role: user.role,
+      status: user.status
     };
     next();
   } catch (error) {
