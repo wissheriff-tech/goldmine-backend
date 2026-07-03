@@ -107,14 +107,17 @@ router.post('/callback', (req, res) => {
 // Transfer NSL earnings to user's Orange Money phone.
 router.post('/withdraw', authenticate, transactionLimiter, async (req, res) => {
   try {
-    const { amount_NSL, phone } = req.body;
+    const { amount_NSL, phone, provider } = req.body;
     const nsl = parseFloat(amount_NSL);
+    const isAfricell = (provider || '').toLowerCase() === 'africell';
+    const paymentMethod = isAfricell ? 'africell' : 'orange_money';
+    const networkName   = isAfricell ? 'Africell'     : 'Orange Money';
 
     if (!nsl || nsl < 100) {
       return res.status(400).json({ message: 'Minimum withdrawal is 100 NSL' });
     }
     if (!phone || !/^\+?\d{7,15}$/.test(phone.replace(/\s/g, ''))) {
-      return res.status(400).json({ message: 'Valid Orange Money phone number is required' });
+      return res.status(400).json({ message: `Valid ${networkName} phone number is required` });
     }
 
     const user = await User.findByPk(req.user.id);
@@ -146,16 +149,16 @@ router.post('/withdraw', authenticate, transactionLimiter, async (req, res) => {
         amount_NSL:         nsl,
         amount_usdt:        nslToUsdt(nsl, rate),
         status:             'pending',
-        payment_method:     'orange_money',
+        payment_method:     paymentMethod,
         notes:              orderId,
         withdrawal_address: cleanPhone,
-        withdrawal_network: 'Orange Money',
+        withdrawal_network: networkName,
         reference_id:       orderId,
       }, { transaction: t });
     });
 
     // Withdrawal stays pending — admin reviews and processes manually.
-    logger.info(`Orange Money withdrawal submitted (pending admin review): ${orderId} — ${nsl} NSL for user ${user.id}`);
+    logger.info(`${networkName} withdrawal submitted (pending admin review): ${orderId} — ${nsl} NSL for user ${user.id}`);
 
     return res.json({
       message:    'Withdrawal submitted. Funds will arrive via Orange Money shortly.',

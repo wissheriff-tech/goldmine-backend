@@ -1,7 +1,7 @@
 {
-  "name": "salonmoney-backend",
+  "name": "goldmine-backend",
   "version": "1.0.0",
-  "description": "SalonMoney - Secure Salon Financial Platform",
+  "description": "Gold Mine - Secure Salon Financial Platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -20,7 +20,7 @@
     "finance",
     "investment"
   ],
-  "author": "SalonMoney Team",
+  "author": "Gold Mine Team",
   "license": "MIT",
   "engines": {
     "node": ">=20.x"
@@ -50,6 +50,7 @@
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
     "sqlite3": "^6.0.1",
+    "web-push": "^3.6.7",
     "winston": "^3.19.0"
   },
   "devDependencies": {

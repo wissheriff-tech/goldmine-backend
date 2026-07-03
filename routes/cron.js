@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { User, UserProduct, Product, Transaction, Session, Notification, sequelize } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
@@ -15,7 +16,6 @@ const router = express.Router();
 // Vercel injects Authorization: Bearer <CRON_SECRET> on every cron invocation
 function cronAuth(req, res, next) {
   const secret = process.env.CRON_SECRET;
-  if (!secret && process.env.NODE_ENV !== 'production') return next(); // local dev, no secret required
   if (secret && req.headers.authorization === `Bearer ${secret}`) return next();
   return res.status(401).json({ message: 'Unauthorized' });
 }
@@ -186,38 +186,44 @@ async function runCleanup() {
 
 // ── Vercel Cron Endpoints ─────────────────────────────────────────────────
 router.get('/daily-income', cronAuth, async (req, res) => {
-  logger.info('Cron: daily-income triggered');
+  const runId = crypto.randomBytes(4).toString('hex');
+  const startedAt = new Date().toISOString();
+  logger.info(`Cron[${runId}]: daily-income triggered at=${startedAt} ip=${req.ip}`);
   try {
     const result = await runDailyIncome();
-    logger.info(`Cron: daily-income done — ${result.users_processed} users, ${result.total_NSL} NSL`);
-    res.json({ success: true, ...result });
+    logger.info(`Cron[${runId}]: daily-income done — users=${result.users_processed} nsl=${result.total_NSL} skipped=${result.skipped}`);
+    res.json({ success: true, run_id: runId, ...result });
   } catch (err) {
-    logger.error('Cron: daily-income error:', err);
-    res.status(500).json({ success: false, message: err.message });
+    logger.error(`Cron[${runId}]: daily-income error — ${err.message}`, err);
+    res.status(500).json({ success: false, run_id: runId, message: err.message });
   }
 });
 
 router.get('/auto-renewal', cronAuth, async (req, res) => {
-  logger.info('Cron: auto-renewal triggered');
+  const runId = crypto.randomBytes(4).toString('hex');
+  const startedAt = new Date().toISOString();
+  logger.info(`Cron[${runId}]: auto-renewal triggered at=${startedAt} ip=${req.ip}`);
   try {
     const result = await runAutoRenewal();
-    logger.info(`Cron: auto-renewal done — ${result.renewed} renewed, ${result.deactivated} deactivated`);
-    res.json({ success: true, ...result });
+    logger.info(`Cron[${runId}]: auto-renewal done — renewed=${result.renewed} deactivated=${result.deactivated}`);
+    res.json({ success: true, run_id: runId, ...result });
   } catch (err) {
-    logger.error('Cron: auto-renewal error:', err);
-    res.status(500).json({ success: false, message: err.message });
+    logger.error(`Cron[${runId}]: auto-renewal error — ${err.message}`, err);
+    res.status(500).json({ success: false, run_id: runId, message: err.message });
   }
 });
 
 router.get('/cleanup', cronAuth, async (req, res) => {
-  logger.info('Cron: cleanup triggered');
+  const runId = crypto.randomBytes(4).toString('hex');
+  const startedAt = new Date().toISOString();
+  logger.info(`Cron[${runId}]: cleanup triggered at=${startedAt} ip=${req.ip}`);
   try {
     const result = await runCleanup();
-    logger.info(`Cron: cleanup done — ${result.sessions_deleted} sessions, ${result.notifications_deleted} notifications`);
-    res.json({ success: true, ...result });
+    logger.info(`Cron[${runId}]: cleanup done — sessions=${result.sessions_deleted} notifications=${result.notifications_deleted}`);
+    res.json({ success: true, run_id: runId, ...result });
   } catch (err) {
-    logger.error('Cron: cleanup error:', err);
-    res.status(500).json({ success: false, message: err.message });
+    logger.error(`Cron[${runId}]: cleanup error — ${err.message}`, err);
+    res.status(500).json({ success: false, run_id: runId, message: err.message });
   }
 });
 
@@ -228,13 +234,15 @@ router.post('/trigger', authenticate, authorize(['superadmin', 'admin']), adminL
   if (!jobs[job]) {
     return res.status(400).json({ message: 'job must be one of: daily-income, auto-renewal, cleanup' });
   }
-  logger.info(`Manual cron trigger: ${job} by admin ${req.user.id}`);
+  const runId = crypto.randomBytes(4).toString('hex');
+  logger.info(`Cron[${runId}]: manual trigger — job=${job} admin=${req.user.id} ip=${req.ip}`);
   try {
     const result = await jobs[job]();
-    res.json({ success: true, job, result });
+    logger.info(`Cron[${runId}]: manual trigger done — job=${job}`);
+    res.json({ success: true, run_id: runId, job, result });
   } catch (err) {
-    logger.error(`Manual cron trigger error (${job}):`, err);
-    res.status(500).json({ success: false, message: err.message });
+    logger.error(`Cron[${runId}]: manual trigger error — job=${job} ${err.message}`, err);
+    res.status(500).json({ success: false, run_id: runId, message: err.message });
   }
 });
 

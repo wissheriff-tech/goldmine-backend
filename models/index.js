@@ -22,6 +22,7 @@ const PaymentSetting = require('./PaymentSetting');
 const Testimonial = require('./Testimonial');
 const AdminAuditLog = require('./AdminAuditLog');
 const UserTask = require('./UserTask');
+const PushSubscription = require('./PushSubscription');
 
 // ==================== ASSOCIATIONS ====================
 
@@ -83,6 +84,10 @@ AdminAuditLog.belongsTo(User, { foreignKey: 'target_user_id', as: 'targetUser', 
 User.hasMany(UserTask, { foreignKey: 'user_id', as: 'tasks' });
 UserTask.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// User <-> PushSubscription
+User.hasMany(PushSubscription, { foreignKey: 'user_id', as: 'pushSubscriptions' });
+PushSubscription.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 module.exports = {
   sequelize,
   User,
@@ -101,4 +106,5 @@ module.exports = {
   Testimonial,
   AdminAuditLog,
   UserTask,
+  PushSubscription,
 };

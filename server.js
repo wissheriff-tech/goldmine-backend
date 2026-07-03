@@ -1,5 +1,6 @@
 // Force pg into ncc bundle
 require("pg");
+const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
 const crypto = require('crypto');
@@ -17,7 +18,10 @@ const { Op } = require('sequelize');
 // Security middleware
 const {
   securityHeaders,
+  permissionsPolicyHeaders,
+  noCacheHeaders,
   globalLimiter,
+  passwordResetLimiter,
   requestLogger,
   validateContentType,
   createCookieWriteGuard,
@@ -105,6 +109,7 @@ app.use(cors(corsOptions));
 app.use(cookieParser());
 app.use(compression()); // Compress responses
 app.use(securityHeaders); // Security headers via Helmet
+app.use(permissionsPolicyHeaders); // L-1: Permissions-Policy header
 app.use(express.json({ limit: '10mb' })); // Parse JSON with size limit
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(preventParameterPollution); // Prevent parameter pollution
@@ -113,13 +118,28 @@ app.use(validateContentType); // Validate content types
 app.use(createCookieWriteGuard(isAllowedOrigin)); // CSRF-style protection for cookie-auth writes
 app.use(sanitizeProductionErrors); // Avoid exposing internal error details in production route catches
 
-// Legacy local upload URLs remain supported, but now use the same record-level
-// authorization as the protected file API instead of allowing any signed-in user.
-const { serveLegacyUpload } = require('./routes/files');
-app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, serveLegacyUpload);
+// L-5: Serve public directory (.well-known/security.txt, robots.txt)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Serve uploaded files — authenticated route only (no unauthenticated static access)
+app.get(/^\/uploads\/(.+)$/, require('./middleware/auth').authenticate, (req, res) => {
+  const rawSegment = req.params[0] || '';
+  const uploadsDir = path.join(__dirname, 'uploads');
+  const requestedPath = path.normalize(rawSegment).replace(/^(\.\.[/\\])+/, '');
+  const filePath = path.join(uploadsDir, requestedPath);
+  if (!filePath.startsWith(uploadsDir + path.sep) && filePath !== uploadsDir) {
+    return res.status(403).json({ message: 'Access denied' });
+  }
+  res.sendFile(filePath, (err) => {
+    if (err) res.status(404).json({ message: 'File not found' });
+  });
+});
 
 // Global Rate Limiting
 app.use('/api/', globalLimiter);
+
+// L-7: No-cache headers for all API responses
+app.use('/api/', noCacheHeaders);
 
 // Database Connection
 let sequelize, User, Product, Session;
@@ -215,14 +235,8 @@ const syncSuperAdminUser = async (label) => {
   if (!admin.kyc_verified) updates.kyc_verified = true;
   if (!admin.emailVerified) updates.emailVerified = true;
 
-  if (adminConfig.password) {
-    const passwordMatchesConfig = await admin.comparePassword(adminConfig.password);
-    if (!passwordMatchesConfig) {
-      updates.password_hash = adminConfig.password;
-    }
-  } else {
-    logger.warn(`${label}: SUPER_ADMIN_PASSWORD is not set; existing superadmin password was not synced`);
-  }
+  // Password is managed in the DB only. SUPER_ADMIN_PASSWORD is used once for initial seeding
+  // and is intentionally ignored on subsequent boots to prevent env-driven overrides.
 
   if (Object.keys(updates).length > 0) {
     await admin.update(updates);
@@ -317,7 +331,7 @@ const depositRoutes = require('./routes/deposit');
 const testimonialsRoutes = require('./routes/testimonials');
 const chatRoutes = require('./routes/chat');
 const ambassadorRoutes = require('./routes/ambassador');
-const fileRoutes = require('./routes/files').router;
+const pushRoutes = require('./routes/push');
 
 // Ping is always available — no DB dependency
 app.get('/api/ping', (req, res) => {
@@ -345,6 +359,10 @@ const initDb = async () => {
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ambassador_region" VARCHAR(100)`,
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "ambassador_sector" VARCHAR(100)`,
       `ALTER TABLE "users" DROP COLUMN IF EXISTS "profile_photo"`,
+      `ALTER TABLE "products" ADD COLUMN IF NOT EXISTS "tax_income_NSL" DECIMAL(18,4) NOT NULL DEFAULT 0`,
+      `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "failed_login_attempts" INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "locked_until" TIMESTAMP WITH TIME ZONE`,
+      `ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "twoFactorVerified" BOOLEAN NOT NULL DEFAULT FALSE`,
     ];
     for (const migration of safeMigrations) {
       try {
@@ -368,6 +386,25 @@ const initDb = async () => {
       }
     } catch (e) {
       logger.warn('Exchange rate reset skipped:', e.message);
+    }
+
+    // Seed task reward settings if not yet present
+    try {
+      const { PaymentSetting: PS2 } = require('./models');
+      const taskSettingDefaults = [
+        ['daily_checkin_reward_NSL', '5'],
+        ['explore_vip_reward_NSL', '10'],
+        ['first_deposit_bonus_NSL', '100'],
+        ['vip_tax_daily_count', '3'],
+      ];
+      for (const [key, value] of taskSettingDefaults) {
+        const existing = await PS2.findOne({ where: { key } });
+        if (!existing) await PS2.upsert({ key, value });
+      }
+      ps.invalidate();
+      logger.info('Vercel DB: task reward settings seeded');
+    } catch (e) {
+      logger.warn('Task reward settings seed skipped:', e.message);
     }
 
     await syncVipProducts('Vercel DB');
@@ -413,6 +450,7 @@ app.use('/api/files', fileRoutes);
 app.use('/api/testimonials', testimonialsRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/ambassador', ambassadorRoutes);
+app.use('/api/push', pushRoutes);
 app.use('/api/orange-money', require('./routes/orangeMoney'));
 app.use('/api/cron', require('./routes/cron'));
 app.use('/api/tasks', require('./routes/tasks'));
@@ -428,21 +466,48 @@ app.get(['/admin', '/superadmin'], (req, res) => {
 });
 
 // Secret-protected superadmin password reset (emergency use only)
+const _isStrongPassword = (v) => /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/.test(String(v || ''));
+const _timingSafeEqual = (a, b) => {
+  const ha = crypto.createHmac('sha256', 'cmp').update(a).digest();
+  const hb = crypto.createHmac('sha256', 'cmp').update(b).digest();
+  return crypto.timingSafeEqual(ha, hb);
+};
+
 app.post('/api/reset-admin-password', passwordResetLimiter, async (req, res) => {
   const { secret, new_password } = req.body;
   const resetSecret = process.env.RESET_SECRET;
-  if (!resetSecret || !timingSafeEqualString(secret, resetSecret)) return res.status(403).json({ message: 'Forbidden' });
-  if (!isStrongPassword(new_password)) {
-    return res.status(400).json({ message: 'Password must be at least 8 characters and contain uppercase, lowercase, number, and special character' });
+  const auditCtx = { ip: req.ip, ua: req.get('user-agent'), ts: new Date().toISOString() };
+
+  if (!resetSecret) {
+    logger.error('Emergency reset: RESET_SECRET not configured', auditCtx);
+    return res.status(503).json({ message: 'Emergency reset unavailable' });
   }
+
+  if (!_timingSafeEqual(String(secret || ''), resetSecret)) {
+    logger.warn('SECURITY: Emergency reset invalid secret attempt', auditCtx);
+    return res.status(403).json({ message: 'Forbidden' });
+  }
+
+  if (!_isStrongPassword(new_password)) {
+    return res.status(400).json({ message: 'Password must be at least 8 characters with uppercase, lowercase, number, and special character' });
+  }
+
   try {
     const admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
-    if (!admin) return res.status(404).json({ message: 'Superadmin not found' });
+    if (!admin) {
+      logger.warn('SECURITY: Emergency reset — superadmin not found', auditCtx);
+      return res.status(404).json({ message: 'Superadmin not found' });
+    }
     admin.password_hash = new_password;
     await admin.save();
-    await Session.update({ is_active: false }, { where: { user_id: admin.id } });
+
+    const { Session } = require('./models');
+    await Session.update({ is_active: false }, { where: { user_id: admin.id, is_active: true } });
+
+    logger.warn('SECURITY: Emergency admin password reset succeeded', { ...auditCtx, username: admin.username });
     res.json({ message: 'Password reset', username: admin.username });
   } catch (err) {
+    logger.error('Emergency reset error', { ...auditCtx, error: err.message });
     res.status(500).json({ message: err.message });
   }
 });

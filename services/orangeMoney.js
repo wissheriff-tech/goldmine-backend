@@ -75,7 +75,7 @@ async function initiateTransfer({ recipientMSISDN, amountSLL, orderId, descripti
       amount:            amountSLL,
       currency:          CURRENCY,
       order_id:          orderId,
-      description:       description || 'SalonMoney withdrawal',
+      description:       description || 'Gold Mine withdrawal',
     },
     {
       headers: {

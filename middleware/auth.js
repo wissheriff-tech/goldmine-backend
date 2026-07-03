@@ -33,6 +33,11 @@ const authenticate = async (req, res, next) => {
       return res.status(401).json({ message: 'Access token expired — please refresh' });
     }
 
+    const storedIp = session.device_info?.ip;
+    if (storedIp && req.ip && req.ip !== storedIp) {
+      logger.warn(`Session IP mismatch — session_id=${session.id} user_id=${session.user_id} stored=${storedIp} current=${req.ip}`);
+    }
+
     const user = await User.findByPk(session.user_id);
     if (!user) {
       await session.update({ is_active: false });
@@ -51,8 +56,11 @@ const authenticate = async (req, res, next) => {
       username: user.username,
       phone: user.phone,
       role: user.role,
-      status: user.status
+      status: user.status,
+      twoFactorEnabled: user.twoFactorEnabled
     };
+    req.sessionId = session.id;
+    req.twoFactorVerified = session.twoFactorVerified === true;
     next();
   } catch (error) {
     logger.error('Authentication error:', error.message);

@@ -9,7 +9,7 @@ const User = sequelize.define('User', {
     autoIncrement: true
   },
   username: {
-    type: DataTypes.STRING,
+    type: DataTypes.STRING(50),
     allowNull: false,
     unique: true,
     set(val) {
@@ -97,7 +97,7 @@ const User = sequelize.define('User', {
     allowNull: true
   },
   email: {
-    type: DataTypes.STRING,
+    type: DataTypes.STRING(255),
     unique: true,
     allowNull: true,
     set(val) {
@@ -141,6 +141,16 @@ const User = sequelize.define('User', {
     defaultValue: 'USD'
   },
   last_login: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null
+  },
+  failed_login_attempts: {
+    type: DataTypes.INTEGER,
+    allowNull: false,
+    defaultValue: 0
+  },
+  locked_until: {
     type: DataTypes.DATE,
     allowNull: true,
     defaultValue: null

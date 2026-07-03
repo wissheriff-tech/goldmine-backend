@@ -22,8 +22,27 @@ const securityHeaders = helmet({
     maxAge: 31536000,
     includeSubDomains: true,
     preload: true
-  }
+  },
+  // L-11: explicit referrer policy and origin isolation
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  originAgentCluster: true,
+  // L-2: disable COEP (we load cross-origin fonts/images)
+  crossOriginEmbedderPolicy: false
 });
+
+// L-1: Permissions-Policy header (not built into Helmet 8)
+const permissionsPolicyHeaders = (req, res, next) => {
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(self)');
+  next();
+};
+
+// L-7: Prevent caching of sensitive API responses
+const noCacheHeaders = (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+};
 
 /**
  * Global Rate Limiter
@@ -287,6 +306,55 @@ const preventParameterPollution = (req, res, next) => {
 };
 
 /**
+ * Change Password Rate Limiter — prevents brute-force password cycling
+ */
+const changePasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: false,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many password change attempts.',
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      message: 'Too many password change attempts. Please try again later.',
+      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+    });
+  }
+});
+
+/**
+ * KYC Upload Rate Limiter
+ */
+const kycUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: 'Too many KYC upload attempts.',
+  handler: (req, res) => {
+    res.status(429).json({
+      success: false,
+      message: 'Too many KYC uploads. Please try again later.',
+      retryAfter: Math.ceil(req.rateLimit.resetTime / 1000)
+    });
+  }
+});
+
+/**
+ * Require superadmin to have completed 2FA in this session before
+ * performing destructive/privileged actions.
+ */
+const requireSuperadmin2FA = (req, res, next) => {
+  if (req.user?.role !== 'superadmin') return next();
+  if (!req.user.twoFactorEnabled) return next();
+  if (req.twoFactorVerified) return next();
+  return res.status(403).json({
+    success: false,
+    message: 'This action requires 2FA verification. Please log out and log back in to complete 2FA.'
+  });
+};
+
+/**
  * Helper function to reset all rate limits for a specific IP
  */
 const resetLimitsForIP = async (ip) => {
@@ -302,6 +370,8 @@ const resetLimitsForIP = async (ip) => {
 
 module.exports = {
   securityHeaders,
+  permissionsPolicyHeaders,
+  noCacheHeaders,
   globalLimiter,
   authLimiter,
   signupLimiter,
@@ -310,6 +380,9 @@ module.exports = {
   adminLimiter,
   financeLimiter,
   passwordResetLimiter,
+  changePasswordLimiter,
+  kycUploadLimiter,
+  requireSuperadmin2FA,
   resetLimitsForIP,
   ipWhitelist,
   requestLogger,

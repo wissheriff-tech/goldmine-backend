@@ -1,13 +1,13 @@
 const axios = require('axios');
 const logger = require('./logger');
 
-const FROM = process.env.EMAIL_FROM || 'SalonMoney <noreply@salonmoney.com>';
+const FROM = process.env.EMAIL_FROM || 'Gold Mine <noreply@salonmoney.com>';
 const FRONTEND = process.env.FRONTEND_URL || 'https://frontend-smoky-eight-43.vercel.app';
 
 const header = `<div style="background:linear-gradient(135deg,#667eea,#764ba2);padding:24px 30px;border-radius:10px 10px 0 0">
-  <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700">SalonMoney</h1></div>`;
+  <h1 style="color:#fff;margin:0;font-size:24px;font-weight:700">Gold Mine</h1></div>`;
 const footer = `<div style="padding:16px 30px;background:#f9f9f9;border-top:1px solid #eee;border-radius:0 0 10px 10px">
-  <p style="color:#999;font-size:12px;margin:0">© 2026 SalonMoney. This is an automated message.</p></div>`;
+  <p style="color:#999;font-size:12px;margin:0">© 2026 Gold Mine. This is an automated message.</p></div>`;
 const wrap = (body) => `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f5f5f5;border-radius:10px;overflow:hidden">${header}
   <div style="background:#fff;padding:30px">${body}</div>${footer}</div>`;
 const btn = (url, label) => `<div style="text-align:center;margin:24px 0">
@@ -37,7 +37,7 @@ class EmailService {
 
   async sendPasswordResetEmail(email, username, resetToken) {
     const url = `${FRONTEND}/reset-password/${resetToken}`;
-    await this.send(email, 'Password Reset Request — SalonMoney', wrap(`
+    await this.send(email, 'Password Reset Request — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">Password Reset</h2>
       <p style="color:#555">Hi ${username},</p>
       <p style="color:#555">Click below to reset your password. This link expires in 1 hour.</p>
@@ -49,16 +49,16 @@ class EmailService {
 
   async sendVerificationEmail(email, username, verificationToken) {
     const url = `${FRONTEND}/verify-email/${verificationToken}`;
-    await this.send(email, 'Verify Your Email — SalonMoney', wrap(`
+    await this.send(email, 'Verify Your Email — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">Verify Your Email</h2>
-      <p style="color:#555">Hi ${username}, welcome to SalonMoney!</p>
+      <p style="color:#555">Hi ${username}, welcome to Gold Mine!</p>
       <p style="color:#555">Click below to verify your email address. Link expires in 24 hours.</p>
       ${btn(url, 'Verify Email')}
     `));
   }
 
   async send2FACode(email, username, code) {
-    await this.send(email, 'Your 2FA Code — SalonMoney', wrap(`
+    await this.send(email, 'Your 2FA Code — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">Two-Factor Authentication</h2>
       <p style="color:#555">Hi ${username},</p>
       <p style="color:#555">Your login code is:</p>
@@ -70,7 +70,7 @@ class EmailService {
   }
 
   async sendTransactionApproved(email, username, type, amount_NSL, amount_usdt, balance_NSL) {
-    await this.send(email, `Transaction Approved — SalonMoney`, wrap(`
+    await this.send(email, `Transaction Approved — Gold Mine`, wrap(`
       <h2 style="color:#333;margin-top:0">✅ Transaction Approved</h2>
       <p style="color:#555">Hi ${username}, your <strong>${type}</strong> has been approved.</p>
       <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
@@ -83,7 +83,7 @@ class EmailService {
   }
 
   async sendTransactionRejected(email, username, type, amount_NSL, reason) {
-    await this.send(email, `Transaction Rejected — SalonMoney`, wrap(`
+    await this.send(email, `Transaction Rejected — Gold Mine`, wrap(`
       <h2 style="color:#333;margin-top:0">❌ Transaction Rejected</h2>
       <p style="color:#555">Hi ${username}, your <strong>${type}</strong> of <strong>${parseFloat(amount_NSL||0).toFixed(2)} NSL</strong> was rejected.</p>
       ${reason ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:12px;margin:16px 0"><p style="color:#991b1b;margin:0">Reason: ${reason}</p></div>` : ''}
@@ -92,16 +92,16 @@ class EmailService {
   }
 
   async sendAccountApproved(email, username) {
-    await this.send(email, 'Account Approved — SalonMoney', wrap(`
+    await this.send(email, 'Account Approved — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">🎉 Account Approved!</h2>
-      <p style="color:#555">Hi ${username}, your SalonMoney account has been approved.</p>
+      <p style="color:#555">Hi ${username}, your Gold Mine account has been approved.</p>
       <p style="color:#555">You can now login and start investing.</p>
       ${btn(`${FRONTEND}/login`, 'Login Now')}
     `));
   }
 
   async sendNewReferral(email, username, referredUsername, bonusAmount) {
-    await this.send(email, 'You Earned a Referral Bonus! — SalonMoney', wrap(`
+    await this.send(email, 'You Earned a Referral Bonus! — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">💰 Referral Bonus Earned!</h2>
       <p style="color:#555">Hi ${username},</p>
       <p style="color:#555"><strong>${referredUsername}</strong> just made their first purchase using your referral code.</p>
@@ -114,17 +114,17 @@ class EmailService {
   }
 
   async sendKYCApproved(email, username) {
-    await this.send(email, 'KYC Verified — SalonMoney', wrap(`
+    await this.send(email, 'KYC Verified — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">✅ Identity Verified</h2>
       <p style="color:#555">Hi ${username},</p>
       <p style="color:#555">Your identity documents have been reviewed and your KYC verification is complete.</p>
-      <p style="color:#555">You now have full access to all SalonMoney features.</p>
+      <p style="color:#555">You now have full access to all Gold Mine features.</p>
       ${btn(`${FRONTEND}/dashboard`, 'Go to Dashboard')}
     `));
   }
 
   async sendKYCRejected(email, username, reason) {
-    await this.send(email, 'KYC Verification Failed — SalonMoney', wrap(`
+    await this.send(email, 'KYC Verification Failed — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">❌ KYC Verification Failed</h2>
       <p style="color:#555">Hi ${username},</p>
       <p style="color:#555">We were unable to verify your identity documents.</p>
@@ -135,7 +135,7 @@ class EmailService {
   }
 
   async sendDailyIncomeSummary(email, username, incomeNSL, newBalanceNSL) {
-    await this.send(email, 'Daily Income Credited — SalonMoney', wrap(`
+    await this.send(email, 'Daily Income Credited — Gold Mine', wrap(`
       <h2 style="color:#333;margin-top:0">💰 Daily Income Credited</h2>
       <p style="color:#555">Hi ${username},</p>
       <p style="color:#555">Your daily investment income has been credited to your account.</p>
@@ -150,7 +150,7 @@ class EmailService {
   async sendProductExpiring(email, username, productName, expiresAt, balanceNSL, requiredNSL) {
     const expiry = new Date(expiresAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
     const shortfall = (parseFloat(requiredNSL) - parseFloat(balanceNSL)).toFixed(2);
-    await this.send(email, `Product Expired — SalonMoney`, wrap(`
+    await this.send(email, `Product Expired — Gold Mine`, wrap(`
       <h2 style="color:#333;margin-top:0">⚠️ Product Expired</h2>
       <p style="color:#555">Hi ${username},</p>
       <p style="color:#555">Your product <strong>${productName}</strong> expired on ${expiry} and could not be auto-renewed due to insufficient balance.</p>
@@ -161,6 +161,19 @@ class EmailService {
       </div>
       <p style="color:#555">Top up your account and reactivate the product to resume earning daily income.</p>
       ${btn(`${FRONTEND}/wallet`, 'Top Up Now')}
+    `));
+  }
+
+  async sendSuperadminLoginAlert(email, username, ip, ua) {
+    await this.send(email, '⚠️ Superadmin Login Detected — Gold Mine', wrap(`
+      <p style="color:#555">A superadmin login was just recorded on your account.</p>
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px;margin:16px 0">
+        <p style="margin:4px 0;color:#991b1b"><strong>Username:</strong> ${username}</p>
+        <p style="margin:4px 0;color:#991b1b"><strong>Time:</strong> ${new Date().toUTCString()}</p>
+        <p style="margin:4px 0;color:#991b1b"><strong>IP:</strong> ${ip || 'unknown'}</p>
+        <p style="margin:4px 0;color:#991b1b"><strong>Device:</strong> ${ua ? ua.substring(0, 120) : 'unknown'}</p>
+      </div>
+      <p style="color:#555">If this was not you, change your password immediately and contact support.</p>
     `));
   }
 }

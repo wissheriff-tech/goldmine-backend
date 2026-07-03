@@ -1,5 +1,6 @@
 const Notification = require('../models/Notification');
 const logger = require('./logger');
+const pushService = require('./pushService');
 
 function formatMoney(amount, currency = 'NSL') {
   const value = Number(amount);
@@ -26,6 +27,14 @@ class NotificationService {
       });
 
       logger.info(`Notification created: ${type} for user ${userId}`);
+
+      pushService.sendToUser(userId, {
+        title,
+        body: message,
+        url: options.action_url || '/dashboard',
+        type
+      }).catch(() => null);
+
       return notification;
     } catch (error) {
       logger.error('Notification creation error:', error);
@@ -50,6 +59,14 @@ class NotificationService {
 
       await Notification.bulkCreate(notifications);
       logger.info(`Bulk notifications created: ${type} for ${userIds.length} users`);
+
+      pushService.sendToUsers(userIds, {
+        title,
+        body: message,
+        url: options.action_url || '/dashboard',
+        type
+      }).catch(() => null);
+
       return notifications;
     } catch (error) {
       logger.error('Bulk notification creation error:', error);

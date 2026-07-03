@@ -30,41 +30,41 @@ const createTransporter = () => {
  */
 const emailConfig = {
   from: {
-    name: process.env.EMAIL_FROM || 'SalonMoney',
+    name: process.env.EMAIL_FROM || 'Gold Mine',
     address: process.env.EMAIL_USER || 'noreply@salonmoney.com'
   },
 
   templates: {
     passwordReset: {
-      subject: 'Password Reset Request - SalonMoney',
+      subject: 'Password Reset Request - Gold Mine',
       priority: 'high'
     },
     emailVerification: {
-      subject: 'Verify Your Email - SalonMoney',
+      subject: 'Verify Your Email - Gold Mine',
       priority: 'high'
     },
     twoFactor: {
-      subject: 'Your Two-Factor Authentication Code - SalonMoney',
+      subject: 'Your Two-Factor Authentication Code - Gold Mine',
       priority: 'high'
     },
     welcome: {
-      subject: 'Welcome to SalonMoney',
+      subject: 'Welcome to Gold Mine',
       priority: 'normal'
     },
     transactionApproved: {
-      subject: 'Transaction Approved - SalonMoney',
+      subject: 'Transaction Approved - Gold Mine',
       priority: 'normal'
     },
     transactionRejected: {
-      subject: 'Transaction Rejected - SalonMoney',
+      subject: 'Transaction Rejected - Gold Mine',
       priority: 'normal'
     },
     accountActivated: {
-      subject: 'Account Activated - SalonMoney',
+      subject: 'Account Activated - Gold Mine',
       priority: 'normal'
     },
     referralBonus: {
-      subject: 'You Earned a Referral Bonus! - SalonMoney',
+      subject: 'You Earned a Referral Bonus! - Gold Mine',
       priority: 'normal'
     }
   },

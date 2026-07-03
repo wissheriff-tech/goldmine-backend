@@ -1,7 +1,19 @@
 const express = require('express');
-const { Testimonial } = require('../models');
+const { Testimonial, PaymentSetting } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
 const { adminLimiter } = require('../middleware/security');
+
+const ACTIVITY_FEED_KEY = 'activity_feed_visible';
+
+async function getActivityFeedEnabled() {
+  try {
+    const setting = await PaymentSetting.findByPk(ACTIVITY_FEED_KEY);
+    if (!setting) return true;
+    return setting.value !== 'false';
+  } catch {
+    return true;
+  }
+}
 
 const router = express.Router();
 
@@ -173,7 +185,7 @@ const decorateTestimonial = (row) => {
     flag: plain.flag || config?.flag || '',
     currency_code: config?.currency_code || 'NSL',
     currency_symbol: config?.currency_symbol || 'NSL',
-    currency_name: config?.currency_name || 'SalonMoney credit',
+    currency_name: config?.currency_name || 'Gold Mine credit',
     amount_local: amount,
     amount_display: formatLocalAmount(amount, config),
   };
@@ -195,14 +207,50 @@ if (process.env.AUTO_SEED_TESTIMONIALS === 'true') {
   seedIfNeeded();
 }
 
+// Public: activity feed visibility setting
+router.get('/settings', async (req, res) => {
+  try {
+    const enabled = await getActivityFeedEnabled();
+    res.json({ activity_feed_visible: enabled });
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching settings', error: err.message });
+  }
+});
+
+// Admin: update activity feed visibility
+router.patch('/settings', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
+  try {
+    const { activity_feed_visible } = req.body;
+    if (typeof activity_feed_visible !== 'boolean') {
+      return res.status(400).json({ message: 'activity_feed_visible must be a boolean' });
+    }
+    await PaymentSetting.upsert({ key: ACTIVITY_FEED_KEY, value: String(activity_feed_visible), updated_by: req.user.id });
+    res.json({ activity_feed_visible });
+  } catch (err) {
+    res.status(500).json({ message: 'Error updating settings', error: err.message });
+  }
+});
+
 // Public: visible testimonials for user dashboard feed
 router.get('/', async (req, res) => {
   try {
+    const feedEnabled = await getActivityFeedEnabled();
     const requestedCountry = String(req.query.country || COUNTRY_OPTIONS[0].country).trim();
     const showAllCountries = requestedCountry.toLowerCase() === 'all';
     const countryConfig = showAllCountries ? null : getCountryConfig(requestedCountry);
     const page = parsePositiveInt(req.query.page, 1, 1000);
     const limit = parsePositiveInt(req.query.limit, 5, 30);
+
+    if (!feedEnabled) {
+      return res.json({
+        feed_enabled: false,
+        testimonials: [],
+        countries: COUNTRY_OPTIONS,
+        counts: {},
+        pagination: { page, limit, total: 0, total_pages: 1, country: requestedCountry },
+      });
+    }
+
     const where = { visible: true };
     if (countryConfig) where.country = countryConfig.country;
     if (!showAllCountries && !countryConfig) where.country = COUNTRY_OPTIONS[0].country;
@@ -220,6 +268,7 @@ router.get('/', async (req, res) => {
       counts[option.country] = await Testimonial.count({ where: { visible: true, country: option.country } });
     }));
     res.json({
+      feed_enabled: true,
       testimonials,
       countries: COUNTRY_OPTIONS,
       counts,

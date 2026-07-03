@@ -85,7 +85,7 @@ router.post('/2fa/enable', authenticate, async (req, res) => {
         message: '2FA setup initiated. Please scan the QR code with your authenticator app.',
         secret: secret,
         backup_codes: backupCodes.map(c => c.code),
-        qr_code_url: `otpauth://totp/SalonMoney:${user.username}?secret=${secret}&issuer=SalonMoney`
+        qr_code_url: `otpauth://totp/Gold Mine:${user.username}?secret=${secret}&issuer=Gold Mine`
       });
     } else {
       // Generate and send verification code

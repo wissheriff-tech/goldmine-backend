@@ -127,11 +127,13 @@ const resetPasswordSchema = Joi.object({
 const rechargeSchema = Joi.object({
   amount_NSL: Joi.number()
     .positive()
-    .min(1)
+    .min(100)
+    .max(1000000)
     .required()
     .messages({
       'number.positive': 'Amount must be positive',
-      'number.min': 'Minimum recharge is 1 NSL'
+      'number.min': 'Minimum recharge is 100 NSL',
+      'number.max': 'Recharge amount cannot exceed 1,000,000 NSL'
     }),
 
   payment_method: Joi.string()
@@ -160,9 +162,11 @@ const withdrawSchema = Joi.object({
     }),
 
   withdrawal_address: Joi.string()
+    .max(256)
     .required()
     .messages({
-      'any.required': 'Withdrawal address is required'
+      'any.required': 'Withdrawal address is required',
+      'string.max': 'Withdrawal address is too long'
     }),
 
   withdrawal_network: Joi.string()

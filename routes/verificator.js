@@ -1,17 +1,24 @@
 const express = require('express');
+const { Op } = require('sequelize');
 const { User } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
 const router = express.Router();
 
-// Verificator: Get pending users
+// Verificator: Get users with uploaded KYC docs pending review
 router.get('/users/pending', authenticate, authorize(['superadmin', 'verificator']), async (req, res) => {
   try {
     const users = await User.findAll({
-      where: { status: 'pending' },
+      where: {
+        kyc_verified: false,
+        [Op.or]: [
+          { kyc_id_front: { [Op.ne]: null } },
+          { kyc_selfie: { [Op.ne]: null } }
+        ]
+      },
       attributes: { exclude: ['password_hash'] },
-      order: [['created_at', 'DESC']]
+      order: [['created_at', 'ASC']]
     });
 
     res.json(users);

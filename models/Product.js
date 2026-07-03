@@ -40,6 +40,15 @@ const Product = sequelize.define('Product', {
       return val === null ? 0 : parseFloat(val);
     }
   },
+  tax_income_NSL: {
+    type: DataTypes.DECIMAL(18, 4),
+    allowNull: false,
+    defaultValue: 0,
+    get() {
+      const val = this.getDataValue('tax_income_NSL');
+      return val === null ? 0 : parseFloat(val);
+    }
+  },
   validity_days: {
     type: DataTypes.INTEGER,
     allowNull: false,

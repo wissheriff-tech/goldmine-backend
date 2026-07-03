@@ -33,9 +33,9 @@ const productWithRate = (product, nslPerUsdt) => {
 
 const buildDurationOptions = (settings) => ([
   { key: 'short', label: `${settings.dur_short} Days`, days: settings.dur_short, group: 'default', requires_invitation: false },
-  { key: 'week', label: '1 Week', days: settings.dur_week, group: 'default', requires_invitation: false },
-  { key: 'month', label: '1 Month', days: settings.dur_month, group: 'invitation', requires_invitation: true },
-  { key: 'promo', label: settings.dur_promo_label, days: settings.dur_promo, group: 'invitation', requires_invitation: true },
+  { key: 'week',  label: '1 Week',                     days: 7,                  group: 'default', requires_invitation: false },
+  { key: 'month', label: '1 Month',                    days: 30,                 group: 'invitation', requires_invitation: true },
+  { key: 'promo', label: settings.dur_promo_label,     days: settings.dur_promo, group: 'invitation', requires_invitation: true },
 ]);
 
 // Get all products
@@ -124,8 +124,8 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
     const nslPerUsdt = await getNslPerUsdt();
     const durationMap = {
       short: s.dur_short,
-      week:  s.dur_week,
-      month: s.dur_month,
+      week:  7,
+      month: 30,
       promo: s.dur_promo,
     };
 
@@ -149,10 +149,19 @@ router.post('/buy', authenticate, transactionLimiter, validateBuyProduct, async 
       }
       if (user.balance_NSL < product.price_NSL) throw Object.assign(new Error('Insufficient balance'), { status: 400 });
 
-      const existingProduct = await UserProduct.findOne({
-        where: { user_id: user.id, product_id, is_active: true }, transaction: t,
+      const purchaseLimit = product.name === 'VIP0' ? 1 : 2;
+      const lifetimePurchaseCount = await UserProduct.count({
+        where: { user_id: user.id, product_id },
+        transaction: t,
       });
-      if (existingProduct) throw Object.assign(new Error('You already own this product. Wait for it to expire before repurchasing.'), { status: 400, expires_at: existingProduct.expires_at });
+      if (lifetimePurchaseCount >= purchaseLimit) {
+        const vipIdx = VIP_LEVELS.indexOf(product.name);
+        const nextVip = vipIdx >= 0 && vipIdx < VIP_LEVELS.length - 1 ? VIP_LEVELS[vipIdx + 1] : null;
+        throw Object.assign(
+          new Error(`You've reached the lifetime limit for ${product.name} (${purchaseLimit}x).${nextVip ? ` Upgrade to ${nextVip} or higher.` : ''}`),
+          { status: 400 }
+        );
+      }
 
       const purchaseDate = new Date();
       const expiresAt = new Date(purchaseDate.getTime() + chosenDays * 24 * 60 * 60 * 1000);

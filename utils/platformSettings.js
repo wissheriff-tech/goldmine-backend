@@ -14,6 +14,13 @@ const DEFAULTS = {
   dur_month:         30,
   dur_promo:         14,
   dur_promo_label:   'Promo',
+  daily_checkin_reward_NSL: 5,
+  explore_vip_reward_NSL:   10,
+  first_deposit_bonus_NSL:  100,
+  vip_tax_daily_count:      3,
+  show_checkin_reward:      '0',
+  cashout_min_nsl:          150,
+  cashout_min_referrals:    5,
 };
 
 // Simple 30-second in-process cache

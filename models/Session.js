@@ -40,6 +40,10 @@ const Session = sequelize.define('Session', {
   expires_at: {
     type: DataTypes.DATE,
     allowNull: false
+  },
+  twoFactorVerified: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
 }, {
   tableName: 'sessions',

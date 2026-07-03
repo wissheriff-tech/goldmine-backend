@@ -1,7 +1,8 @@
 const socketIo = require('socket.io');
-const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { Op } = require('sequelize');
 const User = require('../models/User');
+const Session = require('../models/Session');
 const Chat = require('../models/Chat');
 const ChatMessage = require('../models/ChatMessage');
 const logger = require('../utils/logger');
@@ -34,14 +35,18 @@ const initializeSocket = (server) => {
         return next(new Error('Authentication error: No token provided'));
       }
 
-      if (!process.env.JWT_SECRET) {
-        logger.error('Socket authentication blocked: JWT_SECRET is not configured');
-        return next(new Error('Authentication error'));
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      const session = await Session.findOne({
+        where: { access_token: tokenHash, is_active: true }
+      });
+
+      const now = new Date();
+      if (!session || now > session.expires_at) {
+        if (session) await session.update({ is_active: false });
+        return next(new Error('Authentication error: Invalid or expired token'));
       }
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findByPk(decoded.userId);
-
+      const user = await User.findByPk(session.user_id);
       if (!user) {
         return next(new Error('Authentication error: User not found'));
       }

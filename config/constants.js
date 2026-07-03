@@ -80,7 +80,7 @@ module.exports = {
 
   // Email Templates
   EMAIL: {
-    FROM_NAME: process.env.EMAIL_FROM || 'SalonMoney',
+    FROM_NAME: process.env.EMAIL_FROM || 'Gold Mine',
     SUPPORT_EMAIL: 'support@salonmoney.com',
     NO_REPLY_EMAIL: 'noreply@salonmoney.com'
   },
@@ -102,7 +102,7 @@ module.exports = {
 
   // Application Info
   APP: {
-    NAME: 'SalonMoney',
+    NAME: 'Gold Mine',
     VERSION: '1.0.0',
     ENVIRONMENT: process.env.NODE_ENV || 'development',
     FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000'
