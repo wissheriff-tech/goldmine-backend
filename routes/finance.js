@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const { sequelize } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const { recordAdminAudit } = require('../utils/adminAudit');
 const emailService = require('../utils/emailService');
 const notificationService = require('../utils/notificationService');
 const { FEE } = require('../config/constants');
@@ -91,6 +92,19 @@ router.get('/nsl-rate', async (req, res) => {
   }
 });
 
+// Public fee rates — authenticated users only (no role restriction)
+router.get('/withdrawal-fees', authenticate, async (req, res) => {
+  try {
+    const [cryptoFee, omFee] = await Promise.all([
+      ps.get('withdrawal_fee_pct'),
+      ps.get('om_withdrawal_fee_pct'),
+    ]);
+    res.json({ crypto_fee_pct: cryptoFee, mobile_fee_pct: omFee });
+  } catch {
+    res.json({ crypto_fee_pct: 10, mobile_fee_pct: 20 });
+  }
+});
+
 // Finance: Get pending transactions
 router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), async (req, res) => {
   try {
@@ -108,7 +122,7 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
     const transactions = await Transaction.findAll({
       where: filter,
       include: [
-        { model: User, as: 'user', attributes: ['phone', 'balance_NSL', 'balance_usdt'] },
+        { model: User, as: 'user', attributes: ['username', 'phone', 'balance_NSL', 'balance_usdt'] },
         { model: User, as: 'approver', attributes: ['phone'] }
       ],
       order: [['timestamp', 'DESC']],
@@ -128,7 +142,7 @@ router.get('/transactions', authenticate, authorize(['superadmin', 'finance']), 
     });
   } catch (error) {
     logger.error('Finance transactions fetch error:', error);
-    res.status(500).json({ message: 'Error fetching transactions', error: error.message });
+    res.status(500).json({ message: 'Error fetching transactions' });
   }
 });
 
@@ -185,11 +199,40 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
       await transaction.save({ transaction: t });
       await user.save({ transaction: t });
 
+      // First deposit bonus: auto-applied if this is user's first deposit and submitted within 1h of registration
+      if (transaction.type === 'recharge') {
+        const priorRecharges = await Transaction.count({
+          where: { user_id: user.id, type: 'recharge', status: 'approved', id: { [Op.ne]: transaction.id } },
+          transaction: t,
+        });
+        const depositAgeMs = new Date(transaction.created_at) - new Date(user.created_at);
+        if (priorRecharges === 0 && depositAgeMs >= 0 && depositAgeMs <= 60 * 60 * 1000) {
+          const rate = await getNslPerUsdt();
+          const bonusNSL = parseFloat(await ps.get('first_deposit_bonus_NSL')) || 100;
+          user.balance_NSL = parseFloat(user.balance_NSL) + bonusNSL;
+          user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, rate);
+          await user.save({ transaction: t });
+          await Transaction.create({
+            user_id: user.id,
+            type: 'income',
+            amount_NSL: bonusNSL,
+            amount_usdt: nslToUsdt(bonusNSL, rate),
+            status: 'completed',
+            description: 'First deposit bonus',
+            reference_id: `first_deposit_bonus_${user.id}_${Date.now()}`,
+          }, { transaction: t });
+          logger.info(`First deposit bonus: ${bonusNSL} NSL to user ${user.id}`);
+        }
+      }
+
       savedTransaction = transaction;
       savedUser = user;
     });
 
     logger.info(`Transaction approved: ${savedTransaction.id} by ${req.user.phone}`);
+
+    recordAdminAudit(req, { action: 'finance.transaction_approve', targetType: 'transaction', targetId: savedTransaction.id, targetUserId: savedUser.id, metadata: { type: savedTransaction.type, amount_NSL: savedTransaction.amount_NSL } })
+      .catch(err => logger.error('Audit log error (finance.transaction_approve):', err.message));
 
     // 3-level referral commission on recharge approvals
     if (savedTransaction.type === 'recharge') {
@@ -215,12 +258,7 @@ router.patch('/transactions/:id/approve', authenticate, authorize(['superadmin',
   } catch (error) {
     if (error.status) return res.status(error.status).json({ message: error.message });
     logger.error('Transaction approval error:', error);
-    res.status(500).json({
-      message: 'Error approving transaction',
-      error: error.message,
-      errorType: error.name,
-      errorDetail: error.parent?.message || error.original?.message || null,
-    });
+    res.status(500).json({ message: 'Error approving transaction' });
   }
 });
 
@@ -245,6 +283,9 @@ router.patch('/transactions/:id/reject', authenticate, authorize(['superadmin', 
 
     await transaction.save();
     logger.info(`Transaction rejected: ${transaction.id} by ${req.user.phone}`);
+
+    recordAdminAudit(req, { action: 'finance.transaction_reject', targetType: 'transaction', targetId: transaction.id, targetUserId: user?.id || null, metadata: { type: transaction.type, amount_NSL: transaction.amount_NSL, reason: reason || null } })
+      .catch(err => logger.error('Audit log error (finance.transaction_reject):', err.message));
 
     // Send email notification
     if (user && user.email) {
@@ -294,7 +335,7 @@ router.patch('/transactions/:id/reject', authenticate, authorize(['superadmin', 
     });
   } catch (error) {
     logger.error('Transaction rejection error:', error);
-    res.status(500).json({ message: 'Error rejecting transaction', error: error.message });
+    res.status(500).json({ message: 'Error rejecting transaction' });
   }
 });
 
@@ -333,12 +374,13 @@ router.get('/users', authenticate, authorize(['superadmin', 'finance']), async (
     });
   } catch (error) {
     logger.error('Finance users fetch error:', error);
-    res.status(500).json({ message: 'Error fetching users', error: error.message });
+    res.status(500).json({ message: 'Error fetching users' });
   }
 });
 
-const MAX_MANUAL_CREDIT_NSL  = parseFloat(process.env.MAX_MANUAL_CREDIT_NSL  || 500000);
-const MAX_MANUAL_CREDIT_USDT = parseFloat(process.env.MAX_MANUAL_CREDIT_USDT || 5000);
+const MAX_MANUAL_CREDIT_NSL      = parseFloat(process.env.MAX_MANUAL_CREDIT_NSL      || 50000);
+const MAX_MANUAL_CREDIT_USDT     = parseFloat(process.env.MAX_MANUAL_CREDIT_USDT     || 500);
+const MAX_DAILY_MANUAL_CREDIT_NSL = parseFloat(process.env.MAX_DAILY_MANUAL_CREDIT_NSL || 100000);
 
 // Finance: Add currency to user
 router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', 'finance']), financeLimiter, validateAddCurrency, async (req, res) => {
@@ -357,6 +399,14 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
     if (nsl  > MAX_MANUAL_CREDIT_NSL)  return res.status(400).json({ message: `Single credit cannot exceed ${MAX_MANUAL_CREDIT_NSL.toLocaleString()} NSL` });
     if (usdt > MAX_MANUAL_CREDIT_USDT) return res.status(400).json({ message: `Single credit cannot exceed ${MAX_MANUAL_CREDIT_USDT.toLocaleString()} USDT` });
     if (nsl <= 0 && usdt <= 0)         return res.status(400).json({ message: 'Specify a positive NSL or USDT amount' });
+
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const dailyCreditTotal = await Transaction.sum('amount_NSL', {
+      where: { approved_by: req.user.id, type: 'recharge', status: 'approved', created_at: { [Op.gte]: todayStart } }
+    }) || 0;
+    if (dailyCreditTotal + nsl > MAX_DAILY_MANUAL_CREDIT_NSL) {
+      return res.status(400).json({ message: `Daily manual credit limit of ${MAX_DAILY_MANUAL_CREDIT_NSL.toLocaleString()} NSL exceeded (used ${dailyCreditTotal.toFixed(2)} today)` });
+    }
 
     const user = await User.findByPk(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -380,6 +430,9 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
 
     logger.info(`Currency added by finance (${req.user.phone}) to user ${user.phone}: NSL=${nsl}, USDT=${usdt}, rate=${rate}`);
 
+    recordAdminAudit(req, { action: 'finance.currency_add', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { amount_NSL: nsl, amount_usdt: usdt, reason: reason || null } })
+      .catch(err => logger.error('Audit log error (finance.currency_add):', err.message));
+
     res.json({
       message: 'Currency added successfully',
       user: {
@@ -393,7 +446,7 @@ router.patch('/users/:id/add-currency', authenticate, authorize(['superadmin', '
     });
   } catch (error) {
     logger.error('Add currency error:', error);
-    res.status(500).json({ message: 'Error adding currency', error: error.message });
+    res.status(500).json({ message: 'Error adding currency' });
   }
 });
 
@@ -414,13 +467,16 @@ router.patch('/users/:id/suspend', authenticate, authorize(['superadmin', 'finan
 
     logger.warn(`User suspended by finance (${req.user.phone}): ${user.phone} - Reason: ${reason || 'No reason'}`);
 
+    recordAdminAudit(req, { action: 'finance.user_suspend', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { phone: user.phone, reason: reason || null } })
+      .catch(err => logger.error('Audit log error (finance.user_suspend):', err.message));
+
     res.json({
       message: 'User account suspended',
       user
     });
   } catch (error) {
     logger.error('User suspension error:', error);
-    res.status(500).json({ message: 'Error suspending user', error: error.message });
+    res.status(500).json({ message: 'Error suspending user' });
   }
 });
 
@@ -437,6 +493,9 @@ router.patch('/users/:id/activate', authenticate, authorize(['superadmin', 'fina
 
     logger.info(`User activated by finance (${req.user.phone}): ${user.phone} — previous status: ${previousStatus}${reason ? ` — reason: ${reason}` : ''}`);
 
+    recordAdminAudit(req, { action: 'finance.user_activate', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { phone: user.phone, previous_status: previousStatus, reason: reason || null } })
+      .catch(err => logger.error('Audit log error (finance.user_activate):', err.message));
+
     res.json({
       message: 'User account activated',
       user,
@@ -444,7 +503,7 @@ router.patch('/users/:id/activate', authenticate, authorize(['superadmin', 'fina
     });
   } catch (error) {
     logger.error('User activation error:', error);
-    res.status(500).json({ message: 'Error activating user', error: error.message });
+    res.status(500).json({ message: 'Error activating user' });
   }
 });
 
@@ -467,6 +526,9 @@ router.patch('/users/:id/approve', authenticate, authorize(['superadmin', 'finan
 
     logger.info(`User approved by finance (${req.user.phone}): ${user.phone}`);
 
+    recordAdminAudit(req, { action: 'finance.user_approve', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { phone: user.phone } })
+      .catch(err => logger.error('Audit log error (finance.user_approve):', err.message));
+
     // Send email notification
     if (user.email) {
       try {
@@ -486,7 +548,7 @@ router.patch('/users/:id/approve', authenticate, authorize(['superadmin', 'finan
     });
   } catch (error) {
     logger.error('User approval error:', error);
-    res.status(500).json({ message: 'Error approving user', error: error.message });
+    res.status(500).json({ message: 'Error approving user' });
   }
 });
 
@@ -528,7 +590,7 @@ router.patch('/transactions/:id/add-note', authenticate, authorize(['superadmin'
     });
   } catch (error) {
     logger.error('Add note error:', error);
-    res.status(500).json({ message: 'Error adding note', error: error.message });
+    res.status(500).json({ message: 'Error adding note' });
   }
 });
 
@@ -552,7 +614,7 @@ router.get('/transactions/:id', authenticate, authorize(['superadmin', 'finance'
     });
   } catch (error) {
     logger.error('Transaction fetch error:', error);
-    res.status(500).json({ message: 'Error fetching transaction', error: error.message });
+    res.status(500).json({ message: 'Error fetching transaction' });
   }
 });
 
@@ -602,7 +664,7 @@ router.get('/activity-log', authenticate, authorize(['superadmin']), async (req,
     });
   } catch (error) {
     logger.error('Activity log fetch error:', error);
-    res.status(500).json({ message: 'Error fetching activity log', error: error.message });
+    res.status(500).json({ message: 'Error fetching activity log' });
   }
 });
 

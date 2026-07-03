@@ -2,6 +2,7 @@ const express = require('express');
 const { User } = require('../models');
 const { authenticate, authorize } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const { recordAdminAudit } = require('../utils/adminAudit');
 
 const router = express.Router();
 
@@ -35,6 +36,9 @@ router.patch('/users/:id/approve', authenticate, authorize(['superadmin', 'appro
 
     logger.info(`User approved: ${user.phone}`);
 
+    recordAdminAudit(req, { action: 'approval.user_approve', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { phone: user.phone } })
+      .catch(err => logger.error('Audit log error (approval.user_approve):', err.message));
+
     res.json({
       message: 'User account approved',
       user: {
@@ -66,6 +70,9 @@ router.patch('/users/:id/reject', authenticate, authorize(['superadmin', 'approv
     const user = await User.findByPk(req.params.id);
 
     logger.warn(`User approval rejected: ${user.phone} - Reason: ${reason}`);
+
+    recordAdminAudit(req, { action: 'approval.user_reject', targetType: 'user', targetId: user.id, targetUserId: user.id, metadata: { phone: user.phone, reason: reason || null } })
+      .catch(err => logger.error('Audit log error (approval.user_reject):', err.message));
 
     res.json({
       message: 'User approval rejected',
