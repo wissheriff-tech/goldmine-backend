@@ -21,6 +21,8 @@ const DEFAULTS = {
   show_checkin_reward:      '0',
   cashout_min_nsl:          150,
   cashout_min_referrals:    5,
+  whatsapp_group_link:      '',
+  telegram_group_link:      '',
 };
 
 // Simple 30-second in-process cache

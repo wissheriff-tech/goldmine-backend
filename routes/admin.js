@@ -51,6 +51,20 @@ const sendAccountNotification = async (description, task) => {
   }
 };
 
+// Public: community group links (no auth — needed on contact/referral pages)
+router.get('/community-links', async (req, res) => {
+  try {
+    const settings = await ps.getAll();
+    res.json({
+      whatsapp: settings.whatsapp_group_link || '',
+      telegram: settings.telegram_group_link || '',
+    });
+  } catch (err) {
+    logger.error('Community links error:', err);
+    res.status(500).json({ message: 'Error fetching community links' });
+  }
+});
+
 // Admin: Get all users
 router.get('/users', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
@@ -1626,6 +1640,7 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
       'dur_short', 'dur_week', 'dur_month', 'dur_promo', 'dur_promo_label',
       'daily_checkin_reward_NSL', 'explore_vip_reward_NSL', 'first_deposit_bonus_NSL',
       'vip_tax_daily_count', 'show_checkin_reward',
+      'whatsapp_group_link', 'telegram_group_link',
     ];
 
     for (const key of allowed) {
