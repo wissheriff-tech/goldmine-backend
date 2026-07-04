@@ -1,5 +1,6 @@
 // Force pg into ncc bundle
 require("pg");
+const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
