@@ -327,6 +327,7 @@ const batchRoutes = require('./routes/batch');
 const exportRoutes = require('./routes/export');
 const securityRoutes = require('./routes/security');
 const depositRoutes = require('./routes/deposit');
+const fileRoutes = require('./routes/files');
 const testimonialsRoutes = require('./routes/testimonials');
 const chatRoutes = require('./routes/chat');
 const ambassadorRoutes = require('./routes/ambassador');
