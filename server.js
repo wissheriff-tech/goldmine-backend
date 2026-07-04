@@ -3,7 +3,6 @@ require("pg");
 const crypto = require('crypto');
 const express = require('express');
 const http = require('http');
-const crypto = require('crypto');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const compression = require('compression');
@@ -27,7 +26,6 @@ const {
   createCookieWriteGuard,
   sanitizeProductionErrors,
   preventParameterPollution,
-  passwordResetLimiter
 } = require('./middleware/security');
 const { authenticate } = require('./middleware/auth');
 
