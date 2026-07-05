@@ -2272,7 +2272,7 @@ router.post('/broadcast-notification', authenticate, authorize(['superadmin']), 
 
     if (userIds.length === 0) return res.json({ success: true, sent: 0 });
 
-    await notificationService.createBulk(userIds, 'broadcast', title.trim(), message.trim(), {
+    await notificationService.createBulk(userIds, 'system_announcement', title.trim(), message.trim(), {
       action_url: action_url?.trim() || '/dashboard',
       priority: 'high',
     });
