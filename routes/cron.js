@@ -47,7 +47,7 @@ async function runDailyIncome() {
   const userProducts = await UserProduct.findAll({
     where: { is_active: true, expires_at: { [Op.gt]: now } },
     include: [
-      { model: Product, as: 'product', where: { active: true }, attributes: ['id', 'name', 'daily_income_NSL'] },
+      { model: Product, as: 'product', where: { active: true }, attributes: ['id', 'name', 'daily_income_NSL', 'tax_income_NSL'] },
       { model: User,    as: 'user',    where: { status: 'active' }, attributes: ['id', 'username', 'phone', 'email', 'balance_NSL'] },
     ],
   });
@@ -65,7 +65,9 @@ async function runDailyIncome() {
   for (const up of userProducts) {
     const key = `${up.user_id}:${up.product_id}`;
     if (doneSet.has(key)) continue;
-    const income = parseFloat(up.product.daily_income_NSL);
+    const gross = parseFloat(up.product.daily_income_NSL);
+    const tax = parseFloat(up.product.tax_income_NSL || 0);
+    const income = Math.max(0, gross - tax);
     if (income <= 0) continue;
     if (!byUser[up.user_id]) byUser[up.user_id] = { user: up.user, total: 0, txs: [] };
     byUser[up.user_id].total += income;
@@ -101,6 +103,8 @@ async function runDailyIncome() {
       emailService.sendDailyIncomeSummary(data.user.email, data.user.username, data.total, parseFloat(data.user.balance_NSL) + data.total)
         .catch(e => logger.error(`Income email error: ${e.message}`));
     }
+    const productNames = data.txs.map(tx => tx.notes.replace('Daily income from ', '')).join(', ');
+    notificationService.notifyDailyIncome(data.user.id, data.total.toFixed(2), productNames).catch(() => {});
   }
 
   return { users_processed: totalUsers, total_NSL: totalNSL, skipped: doneSet.size };

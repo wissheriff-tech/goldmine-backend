@@ -1,5 +1,5 @@
 const express = require('express');
-const { User, Product, UserProduct, Transaction, DepositProof, PaymentSetting, AdminAuditLog, sequelize } = require('../models');
+const { User, Product, UserProduct, Transaction, Referral, DepositProof, PaymentSetting, AdminAuditLog, sequelize } = require('../models');
 const { Op, QueryTypes } = require('sequelize');
 const Session = require('../models/Session');
 const bcrypt = require('bcryptjs');
@@ -58,6 +58,7 @@ router.get('/community-links', async (req, res) => {
     res.json({
       whatsapp: settings.whatsapp_group_link || '',
       telegram: settings.telegram_group_link || '',
+      whatsapp_support: settings.whatsapp_support_number || '',
     });
   } catch (err) {
     logger.error('Community links error:', err);
@@ -68,33 +69,36 @@ router.get('/community-links', async (req, res) => {
 // Admin: Get all users
 router.get('/users', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
-    const { status, role, limit = 20, skip = 0 } = req.query;
+    const { status, role, search, limit = 20, skip = 0 } = req.query;
     const filter = {};
 
     if (status) filter.status = status;
     if (role) filter.role = role;
+    if (search && search.trim()) {
+      const like = `%${search.trim()}%`;
+      filter[Op.or] = [
+        { username: { [Op.iLike]: like } },
+        { phone: { [Op.iLike]: like } },
+        { referral_code: { [Op.iLike]: like } },
+      ];
+    }
 
     // HIGH FIX: cap pagination limit to prevent unbounded result sets
     const MAX_PAGE_SIZE = 100;
     const parsedLimit = Math.min(Math.max(1, parseInt(limit) || 20), MAX_PAGE_SIZE);
     const parsedSkip = Math.max(0, parseInt(skip) || 0);
 
-    const users = await User.findAll({
+    const { count: total, rows: users } = await User.findAndCountAll({
       where: filter,
       attributes: { exclude: ['password_hash'] },
       limit: parsedLimit,
-      offset: parsedSkip
+      offset: parsedSkip,
+      order: [['created_at', 'DESC']],
     });
-
-    const total = await User.count({ where: filter });
 
     res.json({
       users,
-      pagination: {
-        total,
-        limit: parsedLimit,
-        skip: parsedSkip
-      }
+      pagination: { total, limit: parsedLimit, skip: parsedSkip }
     });
   } catch (error) {
     logger.error('Users fetch error:', error);
@@ -1490,7 +1494,42 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
           logger.info(`First deposit bonus: ${firstDepositBonus} NSL to user ${user.id}`);
         }
 
-        result = { txType: 'deposit', creditNSL, user, baseNSL, feePercent, rate, firstDepositBonus };
+        // Referral bonus: pay referrer on referred user's first deposit
+        let referralBonus = null;
+        if (priorRecharges === 0) {
+          const referral = await Referral.findOne({
+            where: { referred_id: user.id, status: 'pending' },
+            transaction: t,
+          });
+          if (referral) {
+            const bonusPct = parseFloat(referral.bonus_percentage) || 35;
+            const bonusNSL = parseFloat((creditNSL * bonusPct / 100).toFixed(4));
+            const referrer = await User.findOne({ where: { id: referral.referrer_id }, lock: t.LOCK.UPDATE, transaction: t });
+            if (referrer) {
+              referrer.balance_NSL = parseFloat(referrer.balance_NSL) + bonusNSL;
+              referrer.balance_usdt = syncUsdtBalanceFromNsl(referrer.balance_NSL, rate);
+              await referrer.save({ transaction: t });
+              await Transaction.create({
+                user_id: referrer.id,
+                type: 'referral_bonus',
+                amount_NSL: bonusNSL,
+                amount_usdt: nslToUsdt(bonusNSL, rate),
+                status: 'completed',
+                description: `Referral bonus for ${user.username || user.phone} first deposit`,
+                reference_id: `referral_bonus_${referral.id}_${Date.now()}`,
+              }, { transaction: t });
+              referral.recharge_amount_NSL = creditNSL;
+              referral.bonus_NSL = bonusNSL;
+              referral.status = 'paid';
+              referral.timestamp = new Date();
+              await referral.save({ transaction: t });
+              referralBonus = { referrerId: referrer.id, bonusNSL, referrerUsername: referrer.username };
+              logger.info(`Referral bonus: ${bonusNSL} NSL to referrer ${referrer.id} for user ${user.id}`);
+            }
+          }
+        }
+
+        result = { txType: 'deposit', creditNSL, user, baseNSL, feePercent, rate, firstDepositBonus, referralBonus };
         logger.info(`Deposit ${tx.id} approved by admin ${req.user.username}: ${baseNSL} NSL → ${creditNSL} credited to user ${user.username}`);
       }
     });
@@ -1516,6 +1555,15 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
         'NSL',
         { transaction_id: req.params.id, gross_NSL: result.baseNSL, feePercent: result.feePercent }
       ));
+      if (result.referralBonus) {
+        sendAccountNotification('Referral bonus', () => notificationService.create(
+          result.referralBonus.referrerId,
+          'referral_bonus',
+          'Referral Bonus Paid!',
+          `You earned ${result.referralBonus.bonusNSL.toLocaleString()} NSL for referring ${result.referralBonus.referrerUsername || 'a user'} who just made their first deposit.`,
+          { action_url: '/referrals', priority: 'high' }
+        )).catch(() => null);
+      }
       await recordAdminAudit(req, {
         action: 'transaction.approve',
         targetType: 'transaction',
@@ -1545,6 +1593,95 @@ router.patch('/transaction/:id/approve', authenticate, authorize(['superadmin', 
   } catch (error) {
     logger.error('Transaction approve error:', error);
     res.status(error.status || 500).json({ message: error.message || 'Approval failed' });
+  }
+});
+
+// POST /api/admin/transactions/bulk-approve — bulk approve pending withdrawals (and deposits using submitted amount)
+router.post('/transactions/bulk-approve', authenticate, authorize(['superadmin', 'admin', 'finance']), adminLimiter, async (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ message: 'ids array required' });
+  if (ids.length > 50) return res.status(400).json({ message: 'Max 50 transactions per bulk action' });
+
+  const results = { approved: [], skipped: [], failed: [] };
+  const nslRate = await getNslPerUsdt();
+  const feePercent = await ps.get('recharge_fee_pct');
+
+  for (const id of ids) {
+    try {
+      let outcome;
+      await sequelize.transaction(
+        { isolationLevel: sequelize.constructor.Transaction.ISOLATION_LEVELS.SERIALIZABLE },
+        async (t) => {
+          const tx = await Transaction.findOne({ where: { id }, lock: t.LOCK.UPDATE, transaction: t });
+          if (!tx) { outcome = { skipped: true, reason: 'not found' }; return; }
+          if (tx.status !== 'pending') { outcome = { skipped: true, reason: 'already processed' }; return; }
+
+          tx.status = 'approved';
+          tx.approved_at = new Date();
+          await tx.save({ transaction: t });
+
+          if (tx.type === 'withdrawal') {
+            outcome = { approved: true, type: 'withdrawal', userId: tx.user_id, amount: tx.amount_NSL };
+          } else {
+            const baseNSL = parseFloat(tx.amount_NSL);
+            const creditNSL = baseNSL * (1 - feePercent / 100);
+            const user = await User.findOne({ where: { id: tx.user_id }, lock: t.LOCK.UPDATE, transaction: t });
+            if (!user) { outcome = { skipped: true, reason: 'user not found' }; return; }
+            user.balance_NSL = parseFloat(user.balance_NSL) + creditNSL;
+            user.balance_usdt = syncUsdtBalanceFromNsl(user.balance_NSL, nslRate);
+            tx.amount_NSL = creditNSL;
+            tx.amount_usdt = nslToUsdt(creditNSL, nslRate);
+            await tx.save({ transaction: t });
+            await user.save({ transaction: t });
+            outcome = { approved: true, type: 'deposit', userId: user.id, creditNSL };
+          }
+        }
+      );
+      if (outcome.skipped) {
+        results.skipped.push({ id, reason: outcome.reason });
+      } else {
+        results.approved.push({ id });
+        if (outcome.type === 'withdrawal') {
+          notificationService.notifyTransactionApproved(outcome.userId, 'withdrawal', outcome.amount).catch(() => {});
+        } else {
+          notificationService.notifyRechargeApproved(outcome.userId, outcome.creditNSL.toFixed(0), 'NSL', {}).catch(() => {});
+        }
+      }
+    } catch (err) {
+      results.failed.push({ id, error: err.message });
+    }
+  }
+
+  await recordAdminAudit(req, {
+    action: 'transaction.bulk_approve',
+    targetType: 'transaction',
+    metadata: { approved: results.approved.length, skipped: results.skipped.length, failed: results.failed.length, ids },
+  });
+
+  res.json({ success: true, ...results });
+});
+
+// PATCH /api/admin/transaction/:id/mark-paid — mark an approved withdrawal as completed/paid
+router.patch('/transaction/:id/mark-paid', authenticate, authorize(['superadmin', 'admin', 'finance']), adminLimiter, async (req, res) => {
+  try {
+    const tx = await Transaction.findOne({ where: { id: req.params.id, type: 'withdrawal' } });
+    if (!tx) return res.status(404).json({ message: 'Withdrawal not found' });
+    if (tx.status !== 'approved') return res.status(400).json({ message: 'Only approved withdrawals can be marked as paid' });
+    tx.status = 'completed';
+    tx.completed_at = new Date();
+    await tx.save();
+    await recordAdminAudit(req, { action: 'transaction.mark_paid', transaction_id: tx.id, user_id: tx.user_id, amount: tx.amount_NSL });
+    sendAccountNotification('Withdrawal paid', () => notificationService.create(
+      tx.user_id,
+      'withdrawal_paid',
+      'Withdrawal Paid!',
+      `Your withdrawal of ${Number(tx.amount_NSL).toLocaleString()} NSL has been sent to your account.`,
+      { action_url: '/withdrawals', priority: 'high' }
+    )).catch(() => null);
+    res.json({ success: true, message: 'Withdrawal marked as paid' });
+  } catch (error) {
+    logger.error('Mark-paid error:', error);
+    res.status(500).json({ message: 'Error marking transaction as paid' });
   }
 });
 
@@ -1640,7 +1777,7 @@ router.put('/platform-settings', authenticate, authorize(['superadmin', 'finance
       'dur_short', 'dur_week', 'dur_month', 'dur_promo', 'dur_promo_label',
       'daily_checkin_reward_NSL', 'explore_vip_reward_NSL', 'first_deposit_bonus_NSL',
       'vip_tax_daily_count', 'show_checkin_reward',
-      'whatsapp_group_link', 'telegram_group_link',
+      'whatsapp_group_link', 'telegram_group_link', 'whatsapp_support_number',
     ];
 
     for (const key of allowed) {
@@ -1723,44 +1860,74 @@ router.post('/sync-usdt-balances', authenticate, authorize(['superadmin']), admi
 // Admin: Net profit overview (superadmin only)
 router.get('/net-profit', authenticate, authorize(['superadmin']), async (req, res) => {
   try {
+    const allTypes = ['recharge', 'purchase', 'renewal', 'withdrawal', 'income', 'referral_bonus'];
+    const approvedStatuses = ['approved', 'completed'];
     const inTypes = ['recharge', 'purchase', 'renewal'];
     const outTypes = ['withdrawal', 'income', 'referral_bonus'];
-    const approvedStatuses = ['approved', 'completed'];
 
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
 
-    const [totalIn, totalOut, monthIn, monthOut] = await Promise.all([
-      Transaction.sum('amount_NSL', {
-        where: { type: { [Op.in]: inTypes }, status: { [Op.in]: approvedStatuses } }
+    // Per-type sums: all-time and this-month grouped
+    const [allTimeSums, monthSums, todaySums, activeProductCount] = await Promise.all([
+      Transaction.findAll({
+        where: { type: { [Op.in]: allTypes }, status: { [Op.in]: approvedStatuses } },
+        attributes: ['type', [sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']],
+        group: ['type'],
+        raw: true,
       }),
-      Transaction.sum('amount_NSL', {
-        where: { type: { [Op.in]: outTypes }, status: { [Op.in]: approvedStatuses } }
+      Transaction.findAll({
+        where: { type: { [Op.in]: allTypes }, status: { [Op.in]: approvedStatuses }, created_at: { [Op.gte]: monthStart } },
+        attributes: ['type', [sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']],
+        group: ['type'],
+        raw: true,
       }),
-      Transaction.sum('amount_NSL', {
-        where: { type: { [Op.in]: inTypes }, status: { [Op.in]: approvedStatuses }, created_at: { [Op.gte]: monthStart } }
+      Transaction.findAll({
+        where: { type: { [Op.in]: allTypes }, status: { [Op.in]: approvedStatuses }, created_at: { [Op.gte]: todayStart } },
+        attributes: ['type', [sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']],
+        group: ['type'],
+        raw: true,
       }),
-      Transaction.sum('amount_NSL', {
-        where: { type: { [Op.in]: outTypes }, status: { [Op.in]: approvedStatuses }, created_at: { [Op.gte]: monthStart } }
-      }),
+      UserProduct.count({ where: { is_active: true, expires_at: { [Op.gt]: now } } }),
     ]);
 
-    const allTimeIn = parseFloat(totalIn) || 0;
-    const allTimeOut = parseFloat(totalOut) || 0;
-    const thisMonthIn = parseFloat(monthIn) || 0;
-    const thisMonthOut = parseFloat(monthOut) || 0;
+    const toMap = (rows) => {
+      const m = {};
+      for (const r of rows) m[r.type] = parseFloat(r.total) || 0;
+      return m;
+    };
+
+    const at = toMap(allTimeSums);
+    const mo = toMap(monthSums);
+    const td = toMap(todaySums);
+
+    const sumTypes = (map, types) => types.reduce((acc, t) => acc + (map[t] || 0), 0);
 
     res.json({
       all_time: {
-        revenue_in: allTimeIn,
-        revenue_out: allTimeOut,
-        net_profit: allTimeIn - allTimeOut,
+        revenue_in: sumTypes(at, inTypes),
+        revenue_out: sumTypes(at, outTypes),
+        net_profit: sumTypes(at, inTypes) - sumTypes(at, outTypes),
+        breakdown_in: { recharge: at.recharge || 0, purchase: at.purchase || 0, renewal: at.renewal || 0 },
+        breakdown_out: { withdrawal: at.withdrawal || 0, income: at.income || 0, referral_bonus: at.referral_bonus || 0 },
       },
       this_month: {
-        revenue_in: thisMonthIn,
-        revenue_out: thisMonthOut,
-        net_profit: thisMonthIn - thisMonthOut,
+        revenue_in: sumTypes(mo, inTypes),
+        revenue_out: sumTypes(mo, outTypes),
+        net_profit: sumTypes(mo, inTypes) - sumTypes(mo, outTypes),
+        breakdown_in: { recharge: mo.recharge || 0, purchase: mo.purchase || 0, renewal: mo.renewal || 0 },
+        breakdown_out: { withdrawal: mo.withdrawal || 0, income: mo.income || 0, referral_bonus: mo.referral_bonus || 0 },
       },
+      today: {
+        income_paid: td.income || 0,
+        referral_bonus: td.referral_bonus || 0,
+        withdrawals: td.withdrawal || 0,
+        deposits: td.recharge || 0,
+        purchases: td.purchase || 0,
+        renewals: td.renewal || 0,
+      },
+      active_products: activeProductCount,
     });
   } catch (error) {
     logger.error('Net profit error:', error);
@@ -2088,6 +2255,38 @@ router.get('/audit-logs', authenticate, authorize(['superadmin']), async (req, r
   } catch (error) {
     logger.error('Audit log fetch error:', error);
     res.status(500).json({ message: 'Error fetching audit logs' });
+  }
+});
+
+// POST /api/admin/broadcast-notification — send push + in-app notification to all or active users
+router.post('/broadcast-notification', authenticate, authorize(['superadmin']), adminLimiter, async (req, res) => {
+  const { title, message, target = 'all', action_url } = req.body;
+  if (!title?.trim() || !message?.trim()) return res.status(400).json({ message: 'title and message are required' });
+
+  try {
+    const where = { role: 'user' };
+    if (target === 'active') where.status = 'active';
+
+    const users = await User.findAll({ where, attributes: ['id'], raw: true });
+    const userIds = users.map(u => u.id);
+
+    if (userIds.length === 0) return res.json({ success: true, sent: 0 });
+
+    await notificationService.createBulk(userIds, 'broadcast', title.trim(), message.trim(), {
+      action_url: action_url?.trim() || '/dashboard',
+      priority: 'high',
+    });
+
+    await recordAdminAudit(req, {
+      action: 'admin.broadcast_notification',
+      metadata: { title, message, target, recipients: userIds.length },
+    });
+
+    logger.info(`Broadcast notification sent by ${req.user.username} to ${userIds.length} users`);
+    res.json({ success: true, sent: userIds.length });
+  } catch (error) {
+    logger.error('Broadcast notification error:', error);
+    res.status(500).json({ message: 'Error sending broadcast notification' });
   }
 });
 

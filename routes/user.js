@@ -133,11 +133,20 @@ router.put('/change-password', authenticate, passwordResetLimiter, async (req, r
 // Get transactions
 router.get('/transactions', authenticate, async (req, res) => {
   try {
-    const { type, status, limit = 20, skip = 0 } = req.query;
+    const { type, status, date_from, date_to, limit = 20, skip = 0 } = req.query;
     const where = { user_id: req.user.id };
 
     if (type) where.type = type;
     if (status) where.status = status;
+    if (date_from || date_to) {
+      where.timestamp = {};
+      if (date_from) where.timestamp[Op.gte] = new Date(date_from);
+      if (date_to) {
+        const toEnd = new Date(date_to);
+        toEnd.setHours(23, 59, 59, 999);
+        where.timestamp[Op.lte] = toEnd;
+      }
+    }
 
     // HIGH FIX: cap pagination limit to prevent unbounded result sets
     const MAX_PAGE_SIZE = 100;
@@ -165,6 +174,67 @@ router.get('/transactions', authenticate, async (req, res) => {
   }
 });
 
+
+// Income summary — today / this month / all time / streak
+router.get('/income-summary', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const now = new Date();
+    const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const approvedStatuses = ['approved', 'completed'];
+
+    const [allTime, month, today] = await Promise.all([
+      Transaction.findAll({
+        where: { user_id: userId, type: 'income', status: { [Op.in]: approvedStatuses } },
+        attributes: [
+          [sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total'],
+          [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+        ],
+        raw: true,
+      }),
+      Transaction.findAll({
+        where: { user_id: userId, type: 'income', status: { [Op.in]: approvedStatuses }, timestamp: { [Op.gte]: monthStart } },
+        attributes: [[sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']],
+        raw: true,
+      }),
+      Transaction.findAll({
+        where: { user_id: userId, type: 'income', status: { [Op.in]: approvedStatuses }, timestamp: { [Op.gte]: todayStart } },
+        attributes: [[sequelize.fn('SUM', sequelize.col('amount_NSL')), 'total']],
+        raw: true,
+      }),
+    ]);
+
+    // Streak: consecutive days with income (check last 90 days)
+    const ninetyDaysAgo = new Date(now); ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const incomeDays = await Transaction.findAll({
+      where: { user_id: userId, type: 'income', status: { [Op.in]: approvedStatuses }, timestamp: { [Op.gte]: ninetyDaysAgo } },
+      attributes: [[sequelize.fn('DATE', sequelize.col('timestamp')), 'day']],
+      group: [sequelize.fn('DATE', sequelize.col('timestamp'))],
+      order: [[sequelize.fn('DATE', sequelize.col('timestamp')), 'DESC']],
+      raw: true,
+    });
+
+    let streak = 0;
+    const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0);
+    for (let i = 0; i < incomeDays.length; i++) {
+      const expected = new Date(todayDate); expected.setDate(expected.getDate() - i);
+      const actual = new Date(incomeDays[i].day);
+      if (actual.toDateString() === expected.toDateString()) { streak++; } else { break; }
+    }
+
+    res.json({
+      today_NSL: parseFloat(today[0]?.total || 0),
+      this_month_NSL: parseFloat(month[0]?.total || 0),
+      all_time_NSL: parseFloat(allTime[0]?.total || 0),
+      total_payments: parseInt(allTime[0]?.count || 0),
+      streak,
+    });
+  } catch (error) {
+    logger.error('Income summary error:', error);
+    res.status(500).json({ message: 'Error fetching income summary' });
+  }
+});
 
 // Request recharge
 router.post('/recharge', authenticate, transactionLimiter, validateRecharge, async (req, res) => {
@@ -785,6 +855,20 @@ async function getCashoutStatus(userId, kycVerified) {
     conditions: { earned_ok: earnedOk, referrals_ok: referralsOk, kyc_ok: kycOk, all_ok: earnedOk && referralsOk && kycOk },
   };
 }
+
+// Toggle auto-renew on a user product
+router.patch('/products/:id/auto-renew', authenticate, async (req, res) => {
+  try {
+    const up = await UserProduct.findOne({ where: { id: req.params.id, user_id: req.user.id } });
+    if (!up) return res.status(404).json({ message: 'Plan not found' });
+    up.auto_renew = !up.auto_renew;
+    await up.save();
+    res.json({ success: true, auto_renew: up.auto_renew });
+  } catch (error) {
+    logger.error('Auto-renew toggle error:', error);
+    res.status(500).json({ message: 'Error toggling auto-renew' });
+  }
+});
 
 // Check own cashout eligibility
 router.get('/cashout-check', authenticate, async (req, res) => {

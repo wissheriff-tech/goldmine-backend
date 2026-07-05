@@ -281,7 +281,10 @@ const syncVipProducts = async (label) => {
   let updated = 0;
 
   for (const plan of VIP_PRODUCT_PLANS) {
-    const [, wasCreated] = await Product.upsert(planToProductSeed(plan, rate, validityDays));
+    const [, wasCreated] = await Product.findOrCreate({
+      where: { name: plan.name },
+      defaults: planToProductSeed(plan, rate, validityDays),
+    });
     wasCreated ? created++ : updated++;
   }
 
@@ -526,7 +529,7 @@ app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
 
   let created = 0, updated = 0;
   for (const p of plans) {
-    const [, wasCreated] = await Product.upsert(p);
+    const [, wasCreated] = await Product.findOrCreate({ where: { name: p.name }, defaults: p });
     wasCreated ? created++ : updated++;
   }
   const { recordAdminAudit } = require('./utils/adminAudit');

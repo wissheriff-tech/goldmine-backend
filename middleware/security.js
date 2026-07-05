@@ -1,5 +1,37 @@
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { RedisStore } = require('rate-limit-redis');
+
+let redisClient = null;
+
+function getRedisClient() {
+  if (redisClient) return redisClient;
+  if (!process.env.REDIS_URL) return null;
+  try {
+    const Redis = require('ioredis');
+    redisClient = new Redis(process.env.REDIS_URL, {
+      enableOfflineQueue: false,
+      maxRetriesPerRequest: 1,
+      connectTimeout: 3000,
+    });
+    redisClient.on('error', (err) => {
+      const logger = require('../utils/logger');
+      logger.warn('Redis rate-limit store error:', err.message);
+    });
+    return redisClient;
+  } catch {
+    return null;
+  }
+}
+
+function makeStore(prefix) {
+  const client = getRedisClient();
+  if (!client) return undefined;
+  return new RedisStore({
+    prefix: `rl:${prefix}:`,
+    sendCommand: (...args) => client.call(...args),
+  });
+}
 
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -50,6 +82,7 @@ const noCacheHeaders = (req, res, next) => {
 const globalLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 150,
+  store: makeStore('global'),
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -68,6 +101,7 @@ const globalLimiter = rateLimit({
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 8,
+  store: makeStore('auth'),
   skipSuccessfulRequests: true,
   standardHeaders: true,
   legacyHeaders: false,
@@ -87,6 +121,7 @@ const authLimiter = rateLimit({
 const transactionLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 30,
+  store: makeStore('tx'),
   message: 'Too many transaction requests. Please try again later.',
   handler: (req, res) => {
     res.status(429).json({
@@ -103,6 +138,7 @@ const transactionLimiter = rateLimit({
 const adminLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 30,
+  store: makeStore('admin'),
   message: 'Too many admin operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -119,6 +155,7 @@ const adminLimiter = rateLimit({
 const financeLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
   max: 30,
+  store: makeStore('finance'),
   message: 'Too many finance operations. Please slow down.',
   handler: (req, res) => {
     res.status(429).json({
@@ -135,6 +172,7 @@ const financeLimiter = rateLimit({
 const passwordResetLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 3,
+  store: makeStore('pwd-reset'),
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Too many password reset attempts.',
@@ -152,8 +190,9 @@ const passwordResetLimiter = rateLimit({
  * Prevents account creation spam / enumeration.
  */
 const signupLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 5,
+  store: makeStore('signup'),
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
@@ -172,8 +211,9 @@ const signupLimiter = rateLimit({
  * Limits how many deposit submissions a user/IP can make per window.
  */
 const depositLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 10,
+  store: makeStore('deposit'),
   message: 'Too many deposit submissions.',
   handler: (req, res) => {
     res.status(429).json({
@@ -311,6 +351,7 @@ const preventParameterPollution = (req, res, next) => {
 const changePasswordLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
+  store: makeStore('pwd-change'),
   skipSuccessfulRequests: false,
   standardHeaders: true,
   legacyHeaders: false,
@@ -330,6 +371,7 @@ const changePasswordLimiter = rateLimit({
 const kycUploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 10,
+  store: makeStore('kyc'),
   message: 'Too many KYC upload attempts.',
   handler: (req, res) => {
     res.status(429).json({
