@@ -18,7 +18,7 @@ async function getActivityFeedEnabled() {
 const router = express.Router();
 
 const VALID_ACTIVITY_TYPES = ['withdrawal', 'earning', 'deposit'];
-const ACTIVITY_TYPES = ['withdrawal', 'earning', 'deposit', 'withdrawal', 'earning', 'deposit'];
+const ACTIVITY_TYPES = VALID_ACTIVITY_TYPES;
 
 const COUNTRY_CONFIG = [
   {
