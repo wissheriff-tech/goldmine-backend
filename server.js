@@ -371,6 +371,15 @@ const initDb = async () => {
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "failed_login_attempts" INTEGER NOT NULL DEFAULT 0`,
       `ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "locked_until" TIMESTAMP WITH TIME ZONE`,
       `ALTER TABLE "sessions" ADD COLUMN IF NOT EXISTS "twoFactorVerified" BOOLEAN NOT NULL DEFAULT FALSE`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'system_announcement'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'admin_message'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'security_alert'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'vip_upgrade'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'account_updated'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'balance_adjusted'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'phone_changed'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'kyc_verified'`,
+      `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'kyc_rejected'`,
     ];
     for (const migration of safeMigrations) {
       try {

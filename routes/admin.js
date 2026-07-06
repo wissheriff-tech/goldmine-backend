@@ -2268,11 +2268,14 @@ router.post('/broadcast-notification', authenticate, authorize(['superadmin']), 
     const [rows] = await sequelize.query(`SELECT id FROM users WHERE role = 'user' ${statusClause}`);
     const userIds = rows.map(r => r.id);
 
-    if (userIds.length === 0) return res.json({ success: true, sent: 0 });
+    if (userIds.length === 0) return res.json({ success: true, sent: 0, noRecipients: true });
 
+    // Ensure enum value exists — log failures so we can diagnose them
     try {
       await sequelize.query(`ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'system_announcement'`);
-    } catch (_) {}
+    } catch (enumErr) {
+      logger.warn('broadcast: enum add skipped:', enumErr.message);
+    }
 
     await notificationService.createBulk(userIds, 'system_announcement', title.trim(), message.trim(), {
       action_url: action_url?.trim() || '/dashboard',
@@ -2288,7 +2291,7 @@ router.post('/broadcast-notification', authenticate, authorize(['superadmin']), 
     res.json({ success: true, sent: userIds.length });
   } catch (error) {
     logger.error('Broadcast notification error:', error);
-    res.status(500).json({ message: 'Error sending broadcast notification' });
+    res.status(500).json({ message: 'Error sending broadcast notification', detail: error.message });
   }
 });
 
