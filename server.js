@@ -273,6 +273,28 @@ const ensureNotificationEnumValues = async () => {
   }
 };
 
+const ensureNotificationSchema = async () => {
+  if (!sequelize || sequelize.getDialect?.() !== 'postgres') return;
+
+  const columnMigrations = [
+    `CREATE TYPE "enum_notifications_priority" AS ENUM ('low', 'medium', 'high', 'urgent')`,
+    `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "data" JSON DEFAULT '{}'`,
+    `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "priority" "enum_notifications_priority" NOT NULL DEFAULT 'medium'`,
+    `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "action_url" VARCHAR(255)`,
+    `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "icon" VARCHAR(255)`,
+    `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "read_at" TIMESTAMP WITH TIME ZONE`,
+    `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "expires_at" TIMESTAMP WITH TIME ZONE`,
+  ];
+
+  for (const migration of columnMigrations) {
+    try {
+      await sequelize.query(migration);
+    } catch (error) {
+      logger.warn(`Notification schema migration skipped: ${error.message}`);
+    }
+  }
+};
+
 const syncVipProducts = async (label) => {
   if (process.env.AUTO_SYNC_VIP_PRODUCTS === 'false') {
     logger.info(`${label}: VIP product sync disabled`);
@@ -304,6 +326,7 @@ if (!isVercel) {
       await sequelize.authenticate();
       logger.info('Database connected');
       await ensureNotificationEnumValues();
+      await ensureNotificationSchema();
       await sequelize.sync({ alter: false, force: false });
       logger.info('Database tables synced');
       await syncSuperAdminUser('Database');
@@ -380,6 +403,14 @@ const initDb = async () => {
       `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'phone_changed'`,
       `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'kyc_verified'`,
       `ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'kyc_rejected'`,
+      // Notifications table column schema migrations
+      `CREATE TYPE "enum_notifications_priority" AS ENUM ('low', 'medium', 'high', 'urgent')`,
+      `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "data" JSON DEFAULT '{}'`,
+      `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "priority" "enum_notifications_priority" NOT NULL DEFAULT 'medium'`,
+      `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "action_url" VARCHAR(255)`,
+      `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "icon" VARCHAR(255)`,
+      `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "read_at" TIMESTAMP WITH TIME ZONE`,
+      `ALTER TABLE "notifications" ADD COLUMN IF NOT EXISTS "expires_at" TIMESTAMP WITH TIME ZONE`,
     ];
     for (const migration of safeMigrations) {
       try {
