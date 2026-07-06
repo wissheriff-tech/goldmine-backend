@@ -246,9 +246,9 @@ router.post('/recharge', authenticate, transactionLimiter, validateRecharge, asy
       return res.status(404).json({ message: 'User not found' });
     }
 
-    // Ensure amount_NSL is a valid number
-    const amountNSL = Number(amount_NSL);
-    if (isNaN(amountNSL) || amountNSL <= 0) {
+    // Ensure amount_NSL is a valid finite number within sane bounds
+    const amountNSL = parseFloat(amount_NSL);
+    if (isNaN(amountNSL) || !isFinite(amountNSL) || amountNSL <= 0 || amountNSL > 10_000_000) {
       return res.status(400).json({ message: 'Invalid amount' });
     }
 
@@ -305,7 +305,8 @@ router.post('/withdraw/calculate-fee', authenticate, transactionLimiter, async (
       return res.status(404).json({ message: 'User not found' });
     }
 
-    if (!amount_NSL || amount_NSL <= 0) {
+    const parsedWithdrawAmt = parseFloat(amount_NSL);
+    if (!parsedWithdrawAmt || isNaN(parsedWithdrawAmt) || !isFinite(parsedWithdrawAmt) || parsedWithdrawAmt <= 0 || parsedWithdrawAmt > 10_000_000) {
       return res.status(400).json({ message: 'Invalid amount' });
     }
 

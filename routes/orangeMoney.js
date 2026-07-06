@@ -56,8 +56,15 @@ router.post('/manual-deposit', authenticate, transactionLimiter, omUpload.single
     const paymentMethod = isAfricell ? 'africell' : 'orange_money';
     const networkLabel  = isAfricell ? 'Africell' : 'Orange Money';
 
-    if (!rawAmount || rawAmount <= 0) return res.status(400).json({ message: 'Please enter a valid deposit amount' });
+    if (!rawAmount || isNaN(rawAmount) || !isFinite(rawAmount) || rawAmount <= 0 || rawAmount > 10_000_000) return res.status(400).json({ message: 'Please enter a valid deposit amount' });
     if (!reference_id?.trim()) return res.status(400).json({ message: 'Reference ID is required' });
+
+    if (timestamp_receipt) {
+      const receiptTime = new Date(timestamp_receipt);
+      if (isNaN(receiptTime.getTime()) || Date.now() - receiptTime.getTime() > 48 * 60 * 60 * 1000) {
+        return res.status(400).json({ message: 'Receipt must be from within the last 48 hours' });
+      }
+    }
 
     // Enforce uniqueness of reference ID across all users
     const existing = await Transaction.findOne({ where: { reference_id: reference_id.trim() } });
