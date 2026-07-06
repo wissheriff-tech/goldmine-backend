@@ -256,7 +256,12 @@ const ensureNotificationEnumValues = async () => {
     'password_reset',
     'recharge_approved',
     'recharge_rejected',
-    'admin_message'
+    'admin_message',
+    'system_announcement',
+    'security_alert',
+    'vip_upgrade',
+    'kyc_verified',
+    'kyc_rejected'
   ];
 
   for (const type of notificationTypes) {
