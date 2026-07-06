@@ -1,5 +1,5 @@
 const express = require('express');
-const { Notification, User } = require('../models');
+const { Notification, User, sequelize } = require('../models');
 const { Op, fn, col } = require('sequelize');
 const { authenticate, authorize } = require('../middleware/auth');
 const { adminLimiter } = require('../middleware/security');
@@ -134,11 +134,10 @@ router.post('/admin/announcement', authenticate, authorize(['superadmin', 'admin
 
     // If no specific users, send to all active users
     if (!userIds || userIds.length === 0) {
-      const users = await User.findAll({
-        where: { status: 'active' },
-        attributes: ['id']
-      });
-      userIds = users.map(u => u.id);
+      const [rows] = await sequelize.query(
+        `SELECT id FROM users WHERE status = 'active' AND role = 'user'`
+      );
+      userIds = rows.map(r => r.id);
     }
 
     await notificationService.createSystemAnnouncement(

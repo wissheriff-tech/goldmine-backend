@@ -260,10 +260,14 @@ router.get('/my', authenticate, async (req, res) => {
 // GET /api/deposit/pending — admin views all pending proofs
 router.get('/pending', authenticate, authorizeRoles('admin', 'superadmin', 'finance'), async (req, res) => {
   try {
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const offset = parseInt(req.query.offset) || 0;
     const proofs = await DepositProof.findAll({
       where: { status: 'pending' },
       include: [{ model: User, as: 'user', attributes: ['id', 'username', 'phone', 'balance_NSL', 'balance_usdt'] }],
-      order: [['created_at', 'ASC']]
+      order: [['created_at', 'ASC']],
+      limit,
+      offset
     });
     res.json({ success: true, data: proofs });
   } catch (error) {

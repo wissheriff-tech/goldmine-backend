@@ -203,7 +203,8 @@ router.get('/:chatId', authenticate, async (req, res) => {
         as: 'sender',
         attributes: ['username', 'role']
       }],
-      order: [['created_at', 'ASC']]
+      order: [['created_at', 'ASC']],
+      limit: 200
     });
 
     // Mark messages as read

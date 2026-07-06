@@ -2264,11 +2264,9 @@ router.post('/broadcast-notification', authenticate, authorize(['superadmin']), 
   if (!title?.trim() || !message?.trim()) return res.status(400).json({ message: 'title and message are required' });
 
   try {
-    const where = { role: 'user' };
-    if (target === 'active') where.status = 'active';
-
-    const users = await User.findAll({ where, attributes: ['id'], raw: true });
-    const userIds = users.map(u => u.id);
+    const statusClause = target === 'active' ? `AND status = 'active'` : '';
+    const [rows] = await sequelize.query(`SELECT id FROM users WHERE role = 'user' ${statusClause}`);
+    const userIds = rows.map(r => r.id);
 
     if (userIds.length === 0) return res.json({ success: true, sent: 0 });
 

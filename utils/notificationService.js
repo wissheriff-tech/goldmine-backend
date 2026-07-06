@@ -33,7 +33,7 @@ class NotificationService {
         body: message,
         url: options.action_url || '/dashboard',
         type
-      }).catch(() => null);
+      }).catch(err => logger.warn(`Push send failed for user ${userId}:`, err.message));
 
       return notification;
     } catch (error) {
@@ -65,7 +65,7 @@ class NotificationService {
         body: message,
         url: options.action_url || '/dashboard',
         type
-      }).catch(() => null);
+      }).catch(err => logger.warn(`Bulk push send failed (${userIds.length} users):`, err.message));
 
       return notifications;
     } catch (error) {
