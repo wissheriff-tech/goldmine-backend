@@ -270,6 +270,13 @@ router.post('/login', authLimiter, validateLogin, async (req, res) => {
       return res.status(401).json({ message: 'Invalid username or password' });
     }
 
+    // Reset lockout state on successful authentication
+    if (user.failed_login_attempts > 0 || user.locked_until) {
+      user.failed_login_attempts = 0;
+      user.locked_until = null;
+      await user.save();
+    }
+
     if (user.status !== 'active') {
       return res.status(403).json({ message: accountStatusMessage(user.status) });
     }
@@ -601,18 +608,17 @@ router.post('/reset-password/:token', passwordResetLimiter, validateResetPasswor
       return res.status(400).json({ message: 'Invalid or expired reset token' });
     }
 
-    // Atomically consume token — prevents concurrent reuse via race condition
+    // Atomically consume token AND update password in one query — prevents
+    // race condition AND ensures the user is never left with token gone but password unchanged
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
     const [consumed] = await User.update(
-      { resetPasswordToken: null, resetPasswordExpires: null },
-      { where: { id: user.id, resetPasswordToken: hashToken(token) } }
+      { resetPasswordToken: null, resetPasswordExpires: null, password_hash: hashedPassword },
+      { where: { id: user.id, resetPasswordToken: hashToken(token) }, individualHooks: false }
     );
     if (!consumed) {
       return res.status(400).json({ message: 'Invalid or expired reset token' });
     }
-
-    // Token consumed — safely set new password
-    user.password_hash = password;
-    await user.save();
     await Session.update({ is_active: false }, { where: { user_id: user.id } });
 
     try {
