@@ -2272,6 +2272,10 @@ router.post('/broadcast-notification', authenticate, authorize(['superadmin']), 
 
     if (userIds.length === 0) return res.json({ success: true, sent: 0 });
 
+    try {
+      await sequelize.query(`ALTER TYPE "enum_notifications_type" ADD VALUE IF NOT EXISTS 'system_announcement'`);
+    } catch (_) {}
+
     await notificationService.createBulk(userIds, 'system_announcement', title.trim(), message.trim(), {
       action_url: action_url?.trim() || '/dashboard',
       priority: 'high',
