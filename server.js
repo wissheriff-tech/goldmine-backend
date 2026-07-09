@@ -560,6 +560,25 @@ app.post('/api/reset-admin-password', passwordResetLimiter, async (req, res) => 
   }
 });
 
+// Emergency: disable 2FA for superadmin (uses same RESET_SECRET)
+app.post('/api/disable-admin-2fa', passwordResetLimiter, async (req, res) => {
+  const { secret } = req.body;
+  const resetSecret = process.env.RESET_SECRET;
+  if (!resetSecret) return res.status(503).json({ message: 'Unavailable' });
+  if (!_timingSafeEqual(String(secret || ''), resetSecret)) return res.status(403).json({ message: 'Forbidden' });
+  try {
+    const admin = await User.scope('withSecrets').findOne({ where: { role: 'superadmin' } });
+    if (!admin) return res.status(404).json({ message: 'Superadmin not found' });
+    admin.twoFactorEnabled = false;
+    admin.twoFactorCode = null;
+    admin.twoFactorExpires = null;
+    await admin.save();
+    res.json({ message: '2FA disabled', username: admin.username });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 // Seed products (admin-only, idempotent)
 app.post('/api/admin/seed-products', authenticate, (req, res, next) => {
   if (req.user.role !== 'superadmin') return res.status(403).json({ message: 'Forbidden' });
